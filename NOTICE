@@ -1,0 +1,19 @@
+P1600dn Series macOS ARM Driver (for HP LaserJet Professional P1606dn, P1607dn,
+P1608dn and P1609dn printers)
+
+This project includes modified or unmodified source from JBIG-KIT:
+Copyright 1995-2014 Markus Kuhn.
+
+The JBIG-KIT source files are licensed under GPL-2.0-or-later. Their
+original copyright and license headers are retained in:
+- src/jbig.c
+- src/jbig_ar.c
+
+The halftone screens and their tone curves (tools/gen_screens.py,
+src/p1600_screen_tables.h), all texts and all translations are the project's
+own; no HP code, tables, texts or data are included.
+
+HP and LaserJet are trademarks of HP Inc. This project is an independent
+driver for these printers; it is not affiliated with, endorsed by or
+sponsored by HP Inc. Product names are used only to identify the printers it
+supports.

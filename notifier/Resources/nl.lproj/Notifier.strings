@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "Papier op. Vul de papierlade bij en druk daarna op de Go-knop op de printer.";
+"Reason-media-jam" = "Papierstoring. Verwijder het vastgelopen papier en sluit de kleppen.";
+"Reason-media-needed" = "Papier nodig. Plaats een vel en druk daarna op de Go-knop op de printer.";
+"Reason-cover-open" = "Sluit de cartridgeklep om verder af te drukken.";
+"Reason-door-open" = "Er staat een klep van de printer open. Sluit deze om door te gaan.";
+"Reason-toner-empty" = "De tonercartridge is leeg of ontbreekt.";
+"Reason-marker-supply-empty" = "De tonercartridge is leeg. Vervang deze om verder af te drukken.";
+"Reason-connecting-to-device" = "De printer reageert niet. Controleer of deze aanstaat en is aangesloten.";
+"Reason-offline" = "De printer is offline. Controleer of deze aanstaat en is aangesloten.";
+"Reason-other" = "De printer vraagt om aandacht.";
+"Toner-low" = "Toner bijna op (%d%%). Houd een nieuwe tonercartridge bij de hand.";
+"Toner-very-low" = "Toner zeer laag (%d%%). Vervang de tonercartridge binnenkort.";
+"Toner-empty" = "De tonercartridge is leeg. Vervang deze om verder af te drukken.";
+"Toner-replaced" = "Nieuwe tonercartridge geplaatst (%d%%).";

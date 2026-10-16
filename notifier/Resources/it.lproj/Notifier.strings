@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "Carta esaurita. Ricarica il vassoio della carta, quindi premi il pulsante Go sulla stampante.";
+"Reason-media-jam" = "Inceppamento della carta. Rimuovi la carta inceppata e chiudi gli sportelli.";
+"Reason-media-needed" = "Carta necessaria. Carica un foglio, quindi premi il pulsante Go sulla stampante.";
+"Reason-cover-open" = "Chiudi lo sportello della cartuccia per continuare a stampare.";
+"Reason-door-open" = "Uno sportello della stampante è aperto. Chiudilo per continuare.";
+"Reason-toner-empty" = "La cartuccia di toner è vuota o mancante.";
+"Reason-marker-supply-empty" = "La cartuccia di toner è vuota. Sostituiscila per continuare a stampare.";
+"Reason-connecting-to-device" = "La stampante non risponde. Verifica che sia accesa e collegata.";
+"Reason-offline" = "La stampante non è in linea. Verifica che sia accesa e collegata.";
+"Reason-other" = "La stampante richiede attenzione.";
+"Toner-low" = "Toner in esaurimento (%d%%). Tieni pronta una cartuccia nuova.";
+"Toner-very-low" = "Toner quasi esaurito (%d%%). Sostituisci presto la cartuccia.";
+"Toner-empty" = "La cartuccia di toner è vuota. Sostituiscila per continuare a stampare.";
+"Toner-replaced" = "Nuova cartuccia di toner installata (%d%%).";

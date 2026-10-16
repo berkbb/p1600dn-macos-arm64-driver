@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "缺紙。請在紙匣中重新裝入紙張，然後按下印表機上的 Go 按鈕。";
+"Reason-media-jam" = "卡紙。請取出卡住的紙張，然後關上各個門。";
+"Reason-media-needed" = "需要紙張。請裝入一張紙，然後按下印表機上的 Go 按鈕。";
+"Reason-cover-open" = "請關上碳粉匣門以繼續列印。";
+"Reason-door-open" = "印表機的門已開啟。請關上以繼續。";
+"Reason-toner-empty" = "碳粉匣已空或未安裝。";
+"Reason-marker-supply-empty" = "碳粉匣已空。請更換碳粉匣以繼續列印。";
+"Reason-connecting-to-device" = "印表機沒有回應。請檢查印表機是否已開啟並已連接。";
+"Reason-offline" = "印表機已離線。請檢查印表機是否已開啟並已連接。";
+"Reason-other" = "印表機需要處理。";
+"Toner-low" = "碳粉不足（%d%%）。請準備新的碳粉匣。";
+"Toner-very-low" = "碳粉嚴重不足（%d%%）。請盡快更換碳粉匣。";
+"Toner-empty" = "碳粉匣已空。請更換碳粉匣以繼續列印。";
+"Toner-replaced" = "已安裝新的碳粉匣（%d%%）。";

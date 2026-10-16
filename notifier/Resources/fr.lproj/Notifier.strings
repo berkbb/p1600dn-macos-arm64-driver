@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "Plus de papier. Remplissez le bac à papier, puis appuyez sur le bouton Go de l'imprimante.";
+"Reason-media-jam" = "Bourrage papier. Retirez le papier coincé et fermez les portes.";
+"Reason-media-needed" = "Papier requis. Chargez une feuille, puis appuyez sur le bouton Go de l'imprimante.";
+"Reason-cover-open" = "Fermez la porte de la cartouche pour continuer l'impression.";
+"Reason-door-open" = "Une porte de l'imprimante est ouverte. Fermez-la pour continuer.";
+"Reason-toner-empty" = "La cartouche de toner est vide ou absente.";
+"Reason-marker-supply-empty" = "La cartouche de toner est vide. Remplacez-la pour continuer à imprimer.";
+"Reason-connecting-to-device" = "L'imprimante ne répond pas. Vérifiez qu'elle est allumée et connectée.";
+"Reason-offline" = "L'imprimante est hors ligne. Vérifiez qu'elle est allumée et connectée.";
+"Reason-other" = "L'imprimante requiert votre attention.";
+"Toner-low" = "Niveau de toner bas (%d %%). Prévoyez une cartouche neuve.";
+"Toner-very-low" = "Niveau de toner très bas (%d %%). Remplacez bientôt la cartouche.";
+"Toner-empty" = "La cartouche de toner est vide. Remplacez-la pour continuer à imprimer.";
+"Toner-replaced" = "Nouvelle cartouche de toner installée (%d %%).";

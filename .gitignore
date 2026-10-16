@@ -1,0 +1,11 @@
+# Build output (objects, binaries, apps, test programs, analyzer plists)
+build/
+test/test_driver
+*.tar.gz
+
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/

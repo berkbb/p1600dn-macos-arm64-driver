@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "Kein Papier. Fülle das Papierfach auf und drücke dann am Drucker die Taste „Go“.";
+"Reason-media-jam" = "Papierstau. Entferne das gestaute Papier und schließe die Klappen.";
+"Reason-media-needed" = "Papier benötigt. Lege ein Blatt ein und drücke dann am Drucker die Taste „Go“.";
+"Reason-cover-open" = "Schließe die Patronenklappe, um weiterzudrucken.";
+"Reason-door-open" = "Eine Druckerklappe ist offen. Schließe sie, um fortzufahren.";
+"Reason-toner-empty" = "Die Tonerpatrone ist leer oder fehlt.";
+"Reason-marker-supply-empty" = "Die Tonerpatrone ist leer. Ersetze sie, um weiterzudrucken.";
+"Reason-connecting-to-device" = "Der Drucker antwortet nicht. Prüfe, ob er eingeschaltet und angeschlossen ist.";
+"Reason-offline" = "Der Drucker ist offline. Prüfe, ob er eingeschaltet und angeschlossen ist.";
+"Reason-other" = "Der Drucker erfordert deine Aufmerksamkeit.";
+"Toner-low" = "Wenig Toner (%d %%). Halte eine neue Tonerpatrone bereit.";
+"Toner-very-low" = "Sehr wenig Toner (%d %%). Ersetze die Tonerpatrone bald.";
+"Toner-empty" = "Die Tonerpatrone ist leer. Ersetze sie, um weiterzudrucken.";
+"Toner-replaced" = "Neue Tonerpatrone eingesetzt (%d %%).";

@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "Kâğıt bitti. Kâğıt tepsisini doldurun, ardından yazıcıdaki Go düğmesine basın.";
+"Reason-media-jam" = "Kâğıt sıkıştı. Sıkışan kâğıdı çıkarın ve kapakları kapatın.";
+"Reason-media-needed" = "Kâğıt gerekiyor. Bir kâğıt yerleştirin, ardından yazıcıdaki Go düğmesine basın.";
+"Reason-cover-open" = "Yazdırmaya devam etmek için kartuş kapağını kapatın.";
+"Reason-door-open" = "Yazıcının bir kapağı açık. Devam etmek için kapatın.";
+"Reason-toner-empty" = "Toner kartuşu boş veya takılı değil.";
+"Reason-marker-supply-empty" = "Toner kartuşu boş. Yazdırmaya devam etmek için değiştirin.";
+"Reason-connecting-to-device" = "Yazıcı yanıt vermiyor. Açık ve bağlı olduğunu kontrol edin.";
+"Reason-offline" = "Yazıcı çevrim dışı. Açık ve bağlı olduğunu kontrol edin.";
+"Reason-other" = "Yazıcı müdahale bekliyor.";
+"Toner-low" = "Toner azaldı (%%%d). Yeni bir kartuş hazır bulundurun.";
+"Toner-very-low" = "Toner çok azaldı (%%%d). Kartuşu yakında değiştirin.";
+"Toner-empty" = "Toner kartuşu boş. Yazdırmaya devam etmek için değiştirin.";
+"Toner-replaced" = "Yeni toner kartuşu takıldı (%%%d).";

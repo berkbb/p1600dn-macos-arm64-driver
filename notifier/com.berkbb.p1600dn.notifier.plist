@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.berkbb.p1600dn.notifier</string>
+	<key>Program</key>
+	<string>/Library/Printers/p1600dn/P1600dn Notifier.app/Contents/MacOS/P1600dnNotifier</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>com.berkbb.p1600dn.notifier</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>

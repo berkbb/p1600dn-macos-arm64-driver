@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "No hay papel. Rellena la bandeja de papel y pulsa el botón Go de la impresora.";
+"Reason-media-jam" = "Atasco de papel. Retira el papel atascado y cierra las puertas.";
+"Reason-media-needed" = "Se necesita papel. Carga una hoja y pulsa el botón Go de la impresora.";
+"Reason-cover-open" = "Cierra la puerta del cartucho para seguir imprimiendo.";
+"Reason-door-open" = "Hay una puerta de la impresora abierta. Ciérrala para continuar.";
+"Reason-toner-empty" = "El cartucho de tóner está vacío o no está instalado.";
+"Reason-marker-supply-empty" = "El cartucho de tóner está vacío. Sustitúyelo para seguir imprimiendo.";
+"Reason-connecting-to-device" = "La impresora no responde. Comprueba que está encendida y conectada.";
+"Reason-offline" = "La impresora está desconectada. Comprueba que está encendida y conectada.";
+"Reason-other" = "La impresora requiere atención.";
+"Toner-low" = "Queda poco tóner (%d %%). Ten preparado un cartucho nuevo.";
+"Toner-very-low" = "Queda muy poco tóner (%d %%). Sustituye el cartucho pronto.";
+"Toner-empty" = "El cartucho de tóner está vacío. Sustitúyelo para seguir imprimiendo.";
+"Toner-replaced" = "Nuevo cartucho de tóner instalado (%d %%).";

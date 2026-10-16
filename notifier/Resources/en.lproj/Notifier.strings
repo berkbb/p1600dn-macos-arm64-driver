@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "Out of paper. Refill the paper tray, then press Go on the printer.";
+"Reason-media-jam" = "Paper jam. Remove the jammed paper and close the doors.";
+"Reason-media-needed" = "Paper needed. Load a sheet, then press Go on the printer.";
+"Reason-cover-open" = "Close the cartridge door to continue printing.";
+"Reason-door-open" = "A printer door is open. Close it to continue.";
+"Reason-toner-empty" = "The print cartridge is empty or missing.";
+"Reason-marker-supply-empty" = "The print cartridge is empty. Replace it to keep printing.";
+"Reason-connecting-to-device" = "The printer is not responding. Check that it is on and connected.";
+"Reason-offline" = "The printer is offline. Check that it is on and connected.";
+"Reason-other" = "The printer needs attention.";
+"Toner-low" = "Toner is low (%d%%). Have a new cartridge ready.";
+"Toner-very-low" = "Toner is very low (%d%%). Replace the cartridge soon.";
+"Toner-empty" = "The print cartridge is empty. Replace it to keep printing.";
+"Toner-replaced" = "New print cartridge installed (%d%%).";

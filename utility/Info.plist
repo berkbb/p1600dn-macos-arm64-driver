@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>P1600dn Series Utility</string>
+	<key>CFBundleExecutable</key>
+	<string>P1600dnUtility</string>
+	<key>CFBundleIconFile</key>
+	<string>P1600dnApp</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.berkbb.p1600dn.utility</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>da</string>
+		<string>de</string>
+		<string>es</string>
+		<string>fi</string>
+		<string>fr</string>
+		<string>it</string>
+		<string>ko</string>
+		<string>nl</string>
+		<string>no</string>
+		<string>pt</string>
+		<string>sv</string>
+		<string>zh_CN</string>
+		<string>zh_TW</string>
+		<string>tr</string>
+		<string>ro</string>
+	</array>
+	<key>CFBundleName</key>
+	<string>P1600dn Series Utility</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>6.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>6.0.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Native ARM64 port of HP LaserJet Professional Utility for the P1600dn series. GPL-2.0-or-later.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+</dict>
+</plist>

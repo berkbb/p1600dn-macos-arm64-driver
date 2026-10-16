@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "Tomt for papir. Fyll på papirskuffen, og trykk deretter på Go-knappen på skriveren.";
+"Reason-media-jam" = "Papirstopp. Fjern papiret som sitter fast, og lukk dekslene.";
+"Reason-media-needed" = "Det trengs papir. Legg i et ark, og trykk deretter på Go-knappen på skriveren.";
+"Reason-cover-open" = "Lukk kassettdekselet for å fortsette utskriften.";
+"Reason-door-open" = "Et deksel på skriveren er åpent. Lukk det for å fortsette.";
+"Reason-toner-empty" = "Tonerkassetten er tom eller mangler.";
+"Reason-marker-supply-empty" = "Tonerkassetten er tom. Bytt den for å fortsette utskriften.";
+"Reason-connecting-to-device" = "Skriveren svarer ikke. Kontroller at den er slått på og tilkoblet.";
+"Reason-offline" = "Skriveren er frakoblet. Kontroller at den er slått på og tilkoblet.";
+"Reason-other" = "Skriveren trenger tilsyn.";
+"Toner-low" = "Lite toner (%d %%). Ha en ny tonerkassett klar.";
+"Toner-very-low" = "Svært lite toner (%d %%). Bytt tonerkassetten snart.";
+"Toner-empty" = "Tonerkassetten er tom. Bytt den for å fortsette utskriften.";
+"Toner-replaced" = "Ny tonerkassett satt inn (%d %%).";

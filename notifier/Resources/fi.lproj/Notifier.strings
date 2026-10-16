@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "Paperi on lopussa. Täytä paperilokero ja paina sitten tulostimen Go-painiketta.";
+"Reason-media-jam" = "Paperitukos. Poista juuttunut paperi ja sulje luukut.";
+"Reason-media-needed" = "Paperia tarvitaan. Lisää arkki ja paina sitten tulostimen Go-painiketta.";
+"Reason-cover-open" = "Sulje värikasetin luukku, jotta voit jatkaa tulostamista.";
+"Reason-door-open" = "Tulostimen luukku on auki. Jatka sulkemalla se.";
+"Reason-toner-empty" = "Värikasetti on tyhjä tai puuttuu.";
+"Reason-marker-supply-empty" = "Värikasetti on tyhjä. Vaihda se, jotta voit jatkaa tulostamista.";
+"Reason-connecting-to-device" = "Tulostin ei vastaa. Tarkista, että se on päällä ja kytketty.";
+"Reason-offline" = "Tulostin ei ole yhteydessä. Tarkista, että se on päällä ja kytketty.";
+"Reason-other" = "Tulostin vaatii huomiota.";
+"Toner-low" = "Väriaine vähissä (%d %%). Pidä uusi värikasetti valmiina.";
+"Toner-very-low" = "Väriaine erittäin vähissä (%d %%). Vaihda värikasetti pian.";
+"Toner-empty" = "Värikasetti on tyhjä. Vaihda se, jotta voit jatkaa tulostamista.";
+"Toner-replaced" = "Uusi värikasetti asennettu (%d %%).";

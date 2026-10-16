@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "용지가 없습니다. 용지함에 용지를 채운 다음 프린터의 Go 버튼을 누르십시오.";
+"Reason-media-jam" = "용지 걸림. 걸린 용지를 제거하고 덮개를 닫으십시오.";
+"Reason-media-needed" = "용지가 필요합니다. 용지를 한 장 넣은 다음 프린터의 Go 버튼을 누르십시오.";
+"Reason-cover-open" = "계속 인쇄하려면 카트리지 덮개를 닫으십시오.";
+"Reason-door-open" = "프린터 덮개가 열려 있습니다. 계속하려면 덮개를 닫으십시오.";
+"Reason-toner-empty" = "토너 카트리지가 비어 있거나 없습니다.";
+"Reason-marker-supply-empty" = "토너 카트리지가 비어 있습니다. 계속 인쇄하려면 교체하십시오.";
+"Reason-connecting-to-device" = "프린터가 응답하지 않습니다. 전원이 켜져 있고 연결되어 있는지 확인하십시오.";
+"Reason-offline" = "프린터가 오프라인 상태입니다. 전원이 켜져 있고 연결되어 있는지 확인하십시오.";
+"Reason-other" = "프린터를 확인해야 합니다.";
+"Toner-low" = "토너가 부족합니다(%d%%). 새 카트리지를 준비해 두십시오.";
+"Toner-very-low" = "토너가 매우 부족합니다(%d%%). 곧 카트리지를 교체하십시오.";
+"Toner-empty" = "토너 카트리지가 비어 있습니다. 계속 인쇄하려면 교체하십시오.";
+"Toner-replaced" = "새 토너 카트리지가 장착되었습니다(%d%%).";

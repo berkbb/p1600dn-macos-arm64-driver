@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  AirPrint for the P1600dn series (p1600dn-airprint), installed into
+  /Library/LaunchDaemons only when the user enables AirPrint. It runs as the
+  unprivileged user nobody, also when nobody is logged in. Every job goes to
+  the CUPS queue, so through the driver filter and its page guard.
+  Exit status 75 (the P1600dn queues changed) restarts it with the new list.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.berkbb.p1600dn.airprint</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Library/Printers/p1600dn/p1600dn-airprint</string>
+	</array>
+	<key>UserName</key>
+	<string>nobody</string>
+	<key>GroupName</key>
+	<string>nobody</string>
+	<key>Umask</key>
+	<integer>63</integer>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardErrorPath</key>
+	<string>/Library/Logs/p1600dn-airprint.log</string>
+</dict>
+</plist>

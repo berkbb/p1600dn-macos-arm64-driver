@@ -1,0 +1,17 @@
+/* P1600dn Notifier: generic notice texts. The driver's own message (the
+ * PPD's localized text, printer-state-message) is shown instead when the
+ * printer reports one. Reason-* keys follow the IPP printer-state-reasons. */
+"Reason-media-empty" = "Nu mai este hârtie. Reumpleți tava de hârtie, apoi apăsați butonul Go de pe imprimantă.";
+"Reason-media-jam" = "Hârtie blocată. Scoateți hârtia blocată și închideți capacele.";
+"Reason-media-needed" = "Este nevoie de hârtie. Încărcați o coală, apoi apăsați butonul Go de pe imprimantă.";
+"Reason-cover-open" = "Închideți capacul cartușului pentru a continua tipărirea.";
+"Reason-door-open" = "Un capac al imprimantei este deschis. Închideți-l pentru a continua.";
+"Reason-toner-empty" = "Cartușul de toner este gol sau nu este instalat.";
+"Reason-marker-supply-empty" = "Cartușul de toner este gol. Înlocuiți-l pentru a continua tipărirea.";
+"Reason-connecting-to-device" = "Imprimanta nu răspunde. Verificați dacă este pornită și conectată.";
+"Reason-offline" = "Imprimanta este offline. Verificați dacă este pornită și conectată.";
+"Reason-other" = "Imprimanta necesită atenție.";
+"Toner-low" = "Nivel scăzut de toner (%d%%). Pregătiți un cartuș nou.";
+"Toner-very-low" = "Nivel foarte scăzut de toner (%d%%). Înlocuiți cartușul în curând.";
+"Toner-empty" = "Cartușul de toner este gol. Înlocuiți-l pentru a continua tipărirea.";
+"Toner-replaced" = "A fost instalat un cartuș de toner nou (%d%%).";
