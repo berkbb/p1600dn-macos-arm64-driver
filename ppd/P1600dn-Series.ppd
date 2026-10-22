@@ -36,7 +36,7 @@
 *cupsPJL pjlJamRecovery: "@PJL SET JAMRECOVERY = %?False:OFF;%?True:AUTO;%n"
 *APPrinterUtilityPath: "/Library/Printers/p1600dn/P1600dn Series Utility.app"
 *cupsIPPSupplies: True
-*cupsCommands: "ReportLevels PrintSelfTestPage Clean"
+*cupsCommands: "PrintSelfTestPage Clean"
 *cupsIPPReason PrinterReady/Printer Ready: "Printer Ready"
 *cupsIPPReason CoverOpen/Cover Open: "Cover Open: Close the cartridge door; if it is closed, check that a toner cartridge is in place."
 *cupsIPPReason TonerMissing/Toner Missing: "Toner Missing: Put a toner cartridge in the printer and close the cartridge door."

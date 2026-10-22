@@ -2,7 +2,9 @@
  * commandtop1600dn - CUPS command filter for the HP LaserJet Professional
  * P1600dn series.
  *
- * Handles the PPD's `*cupsCommands`:
+ * Handles the command jobs (`*cupsCommands` lists PrintSelfTestPage and
+ * Clean; ReportLevels is left out, or macOS queues it whenever Options &
+ * Supplies opens, and comes from the notifier):
  *   ReportLevels       USB queues read the toner level from the printer's LEDM
  *                      document over its vendor USB interface, other queues
  *                      from Apple's snmpInk; the level goes to CUPS as
