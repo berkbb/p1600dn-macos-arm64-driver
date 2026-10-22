@@ -109,6 +109,14 @@ bool p1600_notify_should_post(const P1600Notice *notice, P1600TonerBucket rememb
 /* The memory after observing `after`: its bucket when known, else unchanged. */
 P1600TonerBucket p1600_notify_remember(P1600TonerBucket remembered, const P1600PrinterSnapshot *after);
 
+/* At the first observation after a start p1600_notify_compare() only primes,
+ * yet the level may have fallen while the agent was not watching (logged
+ * out, another user's agent asked for it). A bucket worse than the
+ * remembered one (P1600_TONER_UNKNOWN counts as ok) gives its toner notice; an
+ * empty one that a toner-empty or marker-supply-empty reason already
+ * reports gives none. Returns 1 with `notice` filled, else 0. */
+int p1600_notify_prime_toner(P1600TonerBucket remembered, const P1600PrinterSnapshot *after, P1600Notice *notice);
+
 /* The attention reasons active in `snapshot` as a comma-separated list of
  * bases in table order ("media-jam,offline"). The agent remembers it per
  * queue across restarts: at the first observation after a start, a reason
@@ -166,7 +174,20 @@ typedef struct {
     char queue[P1600_NOTIFY_QUEUE_SIZE]; /* printer-name or the last part of the printer URI; "" when absent */
     int sequence;      /* notify-sequence-number */
     int job_id;        /* notify-job-id of job events, else 0 */
+    bool levels_job;   /* job-name is ReportLevels: a toner query, the agent's or another user's */
 } P1600NotifyEvent;
+
+/* A job-completed event that should bring a toner query (a ReportLevels
+ * command job after printing): not one of the toner queries themselves,
+ * this agent's (`own_job`) or another user's, whose end would bring the
+ * next query, and so on every interval. */
+bool p1600_notify_event_wants_levels(const P1600NotifyEvent *event, int own_job);
+
+/* When to ask for the toner level: `wanted` (a job's end plus a delay), but
+ * not before `asked` + `interval` when the agent asked before (`asked` < 0:
+ * never). A query that comes too soon is put off, not dropped, or the level
+ * after the last job of a burst would wait for yet another job. */
+double p1600_notify_levels_time(double wanted, double asked, double interval);
 
 /* Waits up to `wait_seconds` for events of the subscription with
  * Get-Notifications (notify-wait true), asking for the numbers from
@@ -188,5 +209,16 @@ int p1600_notify_wait(http_t *http, int subscription_id, int *sequence, int wait
  * the driver's command filter and updates marker-levels. Returns the job id
  * (> 0) or an P1600NotifyStatus. */
 int p1600_notify_request_levels(const char *queue);
+
+/* How long a ReportLevels job may take. Unfinished by then, the printer is
+ * off or unreachable: its backend would wait for the printer, keep the job
+ * processing and report connecting-to-device as if the user's printer had
+ * a problem. Below the 15 s a notice of that reason waits
+ * (P1600_NOTIFY_SETTLE_SECONDS), so the agent's own job never causes one. */
+#define P1600_NOTIFY_LEVELS_TIMEOUT_SECONDS 12
+
+/* Cancels the ReportLevels job `job_id` on `queue` (cupsd then clears
+ * connecting-to-device). P1600_NOTIFY_OK also when the job has finished. */
+int p1600_notify_cancel_levels(const char *queue, int job_id);
 
 #endif /* P1600_NOTIFY_H */

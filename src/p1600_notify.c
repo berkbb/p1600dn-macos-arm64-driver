@@ -154,6 +154,33 @@ static P1600TonerBucket valid_bucket(P1600TonerBucket bucket) {
     return bucket >= P1600_TONER_OK && bucket <= P1600_TONER_EMPTY ? bucket : P1600_TONER_UNKNOWN;
 }
 
+int p1600_notify_prime_toner(P1600TonerBucket remembered, const P1600PrinterSnapshot *after, P1600Notice *notice) {
+    if (!after || !after->has_data || !notice) return 0;
+    P1600TonerBucket was = valid_bucket(remembered);
+    P1600TonerBucket now = p1600_notify_toner_bucket(after);
+    if (was == P1600_TONER_UNKNOWN) was = P1600_TONER_OK;
+    if (now == P1600_TONER_UNKNOWN || now <= was) return 0;
+    if (now == P1600_TONER_EMPTY && (p1600_notify_attention_active(after, "toner-empty") ||
+                                  p1600_notify_attention_active(after, "marker-supply-empty"))) {
+        return 0;
+    }
+    static const P1600NoticeKind kinds[] = {P1600_NOTICE_TONER_LOW, P1600_NOTICE_TONER_LOW, P1600_NOTICE_TONER_VERY_LOW,
+                                         P1600_NOTICE_TONER_EMPTY};
+    int count = 0;
+    add_notice(notice, &count, kinds[now], after->toner);
+    return 1;
+}
+
+bool p1600_notify_event_wants_levels(const P1600NotifyEvent *event, int own_job) {
+    return event && event->kind == P1600_EVENT_JOB_COMPLETED && !event->levels_job &&
+           (own_job <= 0 || event->job_id != own_job);
+}
+
+double p1600_notify_levels_time(double wanted, double asked, double interval) {
+    if (asked < 0.0 || interval <= 0.0) return wanted;
+    return wanted > asked + interval ? wanted : asked + interval;
+}
+
 bool p1600_notify_should_post(const P1600Notice *notice, P1600TonerBucket remembered) {
     if (!notice) return false;
     P1600TonerBucket bucket;
@@ -506,6 +533,7 @@ typedef struct {
     int sequence;
     int subscription;
     int job_id;
+    bool levels_job;
     P1600NotifyEventKind kind;
     char queue[128];
     char uri_queue[128];
@@ -522,6 +550,7 @@ static void finish_event(PendingEvent *pending, int subscription_id, int first, 
     event->kind = pending->kind;
     event->sequence = pending->sequence;
     event->job_id = pending->job_id;
+    event->levels_job = pending->levels_job;
     copy_line(event->queue, sizeof(event->queue), pending->queue[0] ? pending->queue : pending->uri_queue);
     if (pending->sequence > *last) *last = pending->sequence;
 }
@@ -532,7 +561,7 @@ static void finish_event(PendingEvent *pending, int subscription_id, int first, 
 static int read_events(ipp_t *response, int subscription_id, int first, P1600NotifyEvent *events, int max, int *last) {
     static const char *const names[] = {
         "notify-sequence-number", "notify-subscription-id", "notify-job-id", "notify-subscribed-event",
-        "printer-name", "notify-printer-uri", "job-printer-uri",
+        "printer-name", "notify-printer-uri", "job-printer-uri", "job-name",
     };
     int count = 0;
     PendingEvent pending = {0};
@@ -572,6 +601,9 @@ static int read_events(ipp_t *response, int subscription_id, int first, P1600Not
                                                                        : P1600_EVENT_OTHER;
         } else if (strcmp(name, "printer-name") == 0) {
             copy_line(pending.queue, sizeof(pending.queue), ippGetString(attribute, 0, NULL));
+        } else if (strcmp(name, "job-name") == 0) {
+            const char *job_name = ippGetString(attribute, 0, NULL);
+            pending.levels_job = job_name && strcmp(job_name, "ReportLevels") == 0;
         } else if ((strcmp(name, "notify-printer-uri") == 0 || strcmp(name, "job-printer-uri") == 0) &&
                    !pending.uri_queue[0]) {
             queue_from_uri(ippGetString(attribute, 0, NULL), pending.uri_queue, sizeof(pending.uri_queue));
@@ -661,4 +693,18 @@ int p1600_notify_request_levels(const char *queue) {
         return status;
     }
     return job_id;
+}
+
+int p1600_notify_cancel_levels(const char *queue, int job_id) {
+    if (!valid_queue(queue) || job_id <= 0) return P1600_NOTIFY_FAILED;
+    char resource[256];
+    ipp_t *request = new_request(IPP_OP_CANCEL_JOB, queue, resource, sizeof(resource));
+    if (!request) return P1600_NOTIFY_FAILED;
+    ippAddInteger(request, IPP_TAG_OPERATION, IPP_TAG_INTEGER, "job-id", job_id);
+    ipp_t *response = cupsDoRequest(CUPS_HTTP_DEFAULT, request, resource);
+    /* A job that has finished cannot be canceled: nothing left to do. */
+    bool finished = response && ippGetStatusCode(response) == IPP_STATUS_ERROR_NOT_POSSIBLE;
+    int status = finished ? P1600_NOTIFY_OK : response_status(response);
+    ippDelete(response);
+    return status;
 }

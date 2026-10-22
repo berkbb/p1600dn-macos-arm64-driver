@@ -170,6 +170,7 @@ final class QueueWatcher {
     static let subscriptionRetry: TimeInterval = 10 * 60
     static let busyWait: TimeInterval = 5               // while the printer is processing
     static let idleWait: TimeInterval = 60
+    static let levelsTimeout = TimeInterval(P1600_NOTIFY_LEVELS_TIMEOUT_SECONDS)
 
     let queue: String
     private let deliver: (QueueWatcher, P1600PrinterSnapshot) -> Void
@@ -258,6 +259,8 @@ final class QueueWatcher {
         var processing = false
         var levelsDue: TimeInterval?
         var levelsAsked: TimeInterval?
+        var levelsJob: (id: Int32, cancelAt: TimeInterval)?   // the agent's own ReportLevels job
+        var ownLevelsJob: Int32 = 0                            // its id, to ignore its job-completed
 
         func disconnect() {
             if let connection = http { httpClose(connection) }
@@ -315,14 +318,25 @@ final class QueueWatcher {
                 }
             }
 
-            // The toner level after finished jobs (a ReportLevels command job).
+            // The toner level after finished jobs (a ReportLevels command job),
+            // at most every levelsInterval (p1600_notify_levels_time()).
             if let due = levelsDue, due <= now {
                 levelsDue = nil
-                if levelsAsked.map({ now - $0 >= Self.levelsInterval }) ?? true {
-                    levelsAsked = now
-                    let job = p1600_notify_request_levels(queue)
-                    log.info("ReportLevels for \(self.queue, privacy: .public): \(job)")
+                levelsAsked = now
+                let job = p1600_notify_request_levels(queue)
+                log.info("ReportLevels for \(self.queue, privacy: .public): \(job)")
+                if job > 0 {
+                    levelsJob = (job, now + Self.levelsTimeout)
+                    ownLevelsJob = job
                 }
+                needSnapshot = true
+            }
+            // Not finished in time: the printer is off. Its backend would
+            // wait for it and report connecting-to-device.
+            if let pending = levelsJob, pending.cancelAt <= now {
+                levelsJob = nil
+                let status = p1600_notify_cancel_levels(queue, pending.id)
+                log.info("ReportLevels job \(pending.id) for \(self.queue, privacy: .public) ended: \(status)")
                 needSnapshot = true
             }
             if takeSnapshotDue(now) { needSnapshot = true }
@@ -347,6 +361,7 @@ final class QueueWatcher {
             let subscribed = subscriptionID
             var wait = subscribed != 0 ? (processing ? Self.busyWait : Self.idleWait) : Self.pollInterval
             if let due = levelsDue { wait = min(wait, max(due - now, 0)) }
+            if let pending = levelsJob { wait = min(wait, max(pending.cancelAt - now, 0)) }
             if let left = timeUntilSnapshot(now) { wait = min(wait, left) }
             if subscribed == 0, let refused = refusedAt {
                 wait = min(wait, max(refused + Self.subscriptionRetry - now, 0))
@@ -356,8 +371,11 @@ final class QueueWatcher {
                 let count = p1600_notify_wait(connection, subscribed, &sequence, Int32(wait.rounded(.up)), &events,
                                            Int32(events.count))
                 if count > 0 {
-                    for event in events.prefix(Int(count)) where event.kind == P1600_EVENT_JOB_COMPLETED {
-                        levelsDue = monotonic() + Self.levelsDelay  // debounced: the last job counts
+                    for var event in events.prefix(Int(count)) where p1600_notify_event_wants_levels(&event, ownLevelsJob) {
+                        // Debounced: the last job counts; too soon after the
+                        // last query it waits for the interval instead.
+                        levelsDue = p1600_notify_levels_time(monotonic() + Self.levelsDelay, levelsAsked ?? -1,
+                                                          Self.levelsInterval)
                     }
                     needSnapshot = true
                 } else if count == P1600_NOTIFY_NOT_FOUND.rawValue {
@@ -499,6 +517,13 @@ final class Agent: NSObject, UNUserNotificationCenterDelegate {
         let info = cText(after.info)
         let title = info.isEmpty ? queue : info
         let settle = TimeInterval(P1600_NOTIFY_SETTLE_SECONDS)
+
+        // The first observation only primes p1600_notify_compare(); a toner
+        // level that fell while this agent was not watching still counts.
+        var primed = P1600Notice()
+        if !before.has_data && p1600_notify_prime_toner(remembered, &after, &primed) != 0 {
+            post(primed, queue: queue, title: title)
+        }
 
         for index in 0..<count {
             var notice = notices[index]

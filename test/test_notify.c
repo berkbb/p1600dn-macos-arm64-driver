@@ -407,6 +407,38 @@ static void test_memory(void) {
     CHECK(compare(&second, &third, notices) == 1 && p1600_notify_should_post(&notices[0], memory));
     CHECK(p1600_notify_remember(memory, &third) == P1600_TONER_VERY_LOW);
 
+    /* The first observation after a start: a level that fell while the
+     * agent was not watching gets its notice, once. */
+    P1600Notice primed;
+    P1600PrinterSnapshot four = make(4, "", NULL), zero = make(0, "", NULL);
+    P1600PrinterSnapshot zero_reported = make(0, "", "toner-empty-error");
+    CHECK(p1600_notify_prime_toner(P1600_TONER_OK, &twelve, &primed) == 1 && primed.kind == P1600_NOTICE_TONER_LOW &&
+          primed.level == 12 && p1600_notify_should_post(&primed, P1600_TONER_OK));
+    CHECK(p1600_notify_prime_toner(P1600_TONER_UNKNOWN, &twelve, &primed) == 1 && primed.kind == P1600_NOTICE_TONER_LOW);
+    CHECK(p1600_notify_prime_toner(P1600_TONER_LOW, &twelve, &primed) == 0);
+    CHECK(p1600_notify_prime_toner(P1600_TONER_LOW, &four, &primed) == 1 && primed.kind == P1600_NOTICE_TONER_VERY_LOW);
+    CHECK(p1600_notify_prime_toner(P1600_TONER_VERY_LOW, &zero, &primed) == 1 && primed.kind == P1600_NOTICE_TONER_EMPTY);
+    CHECK(p1600_notify_prime_toner(P1600_TONER_OK, &zero_reported, &primed) == 0);  /* the reason's notice says it */
+    CHECK(p1600_notify_prime_toner(P1600_TONER_OK, &unknown_level, &primed) == 0);
+    CHECK(p1600_notify_prime_toner(P1600_TONER_EMPTY, &sixty, &primed) == 0);
+    CHECK(p1600_notify_prime_toner((P1600TonerBucket)9, &twelve, &primed) == 1);
+    CHECK(p1600_notify_prime_toner(P1600_TONER_OK, &nothing, &primed) == 0 && p1600_notify_prime_toner(P1600_TONER_OK, NULL, &primed) == 0);
+
+    /* Toner queries after printing: at most one per interval, a query that
+     * comes too soon put off rather than dropped, and the queries' own ends
+     * bring none. */
+    CHECK(p1600_notify_levels_time(20.0, -1.0, 1800.0) == 20.0);
+    CHECK(p1600_notify_levels_time(2000.0, 100.0, 1800.0) == 2000.0);
+    CHECK(p1600_notify_levels_time(145.0, 120.0, 1800.0) == 1920.0);
+    CHECK(p1600_notify_levels_time(145.0, 120.0, 0.0) == 145.0);
+    P1600NotifyEvent done = {.kind = P1600_EVENT_JOB_COMPLETED, .job_id = 100};
+    CHECK(p1600_notify_event_wants_levels(&done, 0) && p1600_notify_event_wants_levels(&done, 99));
+    CHECK(!p1600_notify_event_wants_levels(&done, 100));
+    done.levels_job = true;
+    CHECK(!p1600_notify_event_wants_levels(&done, 0));
+    P1600NotifyEvent state = {.kind = P1600_EVENT_PRINTER_STATE_CHANGED};
+    CHECK(!p1600_notify_event_wants_levels(&state, 0) && !p1600_notify_event_wants_levels(NULL, 0));
+
     /* Reasons remembered across restarts. */
     char list[256];
     P1600PrinterSnapshot active = make(40, "", "paused,offline-report,media-jam-error,connecting-to-device,media-jam");
@@ -446,6 +478,7 @@ static void test_memory(void) {
     CHECK(p1600_notice_name(&invalid, name, sizeof(name)) == 0 && name[0] == '\0');
     CHECK(p1600_notice_name(NULL, name, sizeof(name)) == 0 && p1600_notice_name(&low, NULL, 0) == 0);
     puts("[PASS] Memory across restarts: toner bucket, reported reasons; unknown levels carried; notice names");
+    puts("[PASS] First observation: a toner level that fell meanwhile is reported once; toner queries put off, not dropped");
 }
 
 /* --- stand-in cupsd ---------------------------------------------------------- */
@@ -459,6 +492,7 @@ static void test_memory(void) {
 typedef struct {
     char name[128];
     char info[256];
+    char make_model[128];       /* printer-make-and-model when set */
     int state;
     int reason_count;
     char reasons[MAX_REASONS][80];
@@ -521,6 +555,7 @@ struct Standin {
     /* Records. */
     int operations[0x40];
     int snapshots;            /* Get-Printer-Attributes asking for exactly the notifier's 7 */
+    int lookups;              /* every Get-Printer-Attributes of a known printer */
     char printer_uri[256];
     char user[128];
     char requested[16][48];
@@ -534,6 +569,7 @@ struct Standin {
     bool asked_wait;
     int next_job_id;
     int job_ids[8];
+    char job_names[8][64];      /* job-name of each created job */
     int job_count;
     char job_name[128];
     char document_format[64];
@@ -542,6 +578,8 @@ struct Standin {
     int document_job;
     unsigned char document[256];
     size_t document_length;
+    int canceled_job;           /* job-id of the last Cancel-Job */
+    int finished_job;           /* Cancel-Job for it: client-error-not-possible */
 };
 
 static void standin_lock(Standin *standin) {
@@ -668,6 +706,9 @@ static void add_printer_attributes(ipp_t *response, const FakePrinter *printer) 
     ippAddString(response, IPP_TAG_PRINTER, IPP_TAG_URI, "printer-uri-supported", NULL, uri);
     ippAddString(response, IPP_TAG_PRINTER, IPP_TAG_NAME, "printer-name", NULL, printer->name);
     ippAddString(response, IPP_TAG_PRINTER, IPP_TAG_TEXT, "printer-info", NULL, printer->info);
+    if (printer->make_model[0]) {
+        ippAddString(response, IPP_TAG_PRINTER, IPP_TAG_TEXT, "printer-make-and-model", NULL, printer->make_model);
+    }
     ippAddInteger(response, IPP_TAG_PRINTER, IPP_TAG_ENUM, "printer-state", printer->state);
     const char *reasons[MAX_REASONS];
     for (int i = 0; i < printer->reason_count; i++) reasons[i] = printer->reasons[i];
@@ -705,9 +746,15 @@ static void add_event(ipp_t *response, const Standin *standin, const FakeEvent *
     ippAddInteger(response, IPP_TAG_EVENT_NOTIFICATION, IPP_TAG_INTEGER, "notify-sequence-number", event->sequence);
     ippAddString(response, IPP_TAG_EVENT_NOTIFICATION, IPP_TAG_TEXT, "notify-text", NULL, "Printer state changed.");
     if (strncmp(event->event, "job-", 4) == 0) {
-        /* Job events name the printer only by URI here. */
+        /* Job events name the printer only by URI here, and the job by
+         * job-name as cupsd does. */
+        const char *job_name = "Untitled";
+        for (int i = 0; i < standin->job_count; i++) {
+            if (standin->job_ids[i] == event->job_id) job_name = standin->job_names[i];
+        }
         ippAddInteger(response, IPP_TAG_EVENT_NOTIFICATION, IPP_TAG_INTEGER, "notify-job-id", event->job_id);
         ippAddInteger(response, IPP_TAG_EVENT_NOTIFICATION, IPP_TAG_ENUM, "job-state", IPP_JSTATE_COMPLETED);
+        ippAddString(response, IPP_TAG_EVENT_NOTIFICATION, IPP_TAG_NAME, "job-name", NULL, job_name);
     } else {
         ippAddString(response, IPP_TAG_EVENT_NOTIFICATION, IPP_TAG_NAME, "printer-name", NULL, printer->name);
         ippAddInteger(response, IPP_TAG_EVENT_NOTIFICATION, IPP_TAG_ENUM, "printer-state", printer->state);
@@ -760,6 +807,7 @@ static void handle_request(Standin *standin, ipp_t *request, ipp_t *response) {
         if (standin->requested_count == 7 && strcmp(standin->requested[5], "printer-state-message") == 0) {
             standin->snapshots++;
         }
+        standin->lookups++;
         add_printer_attributes(response, &standin->printers[printer]);
         break;
     }
@@ -859,7 +907,10 @@ static void handle_request(Standin *standin, ipp_t *request, ipp_t *response) {
             break;
         }
         int job_id = ++standin->next_job_id;
-        if (standin->job_count < 8) standin->job_ids[standin->job_count++] = job_id;
+        if (standin->job_count < 8) {
+            snprintf(standin->job_names[standin->job_count], sizeof(standin->job_names[0]), "%s", standin->job_name);
+            standin->job_ids[standin->job_count++] = job_id;
+        }
         ippAddInteger(response, IPP_TAG_JOB, IPP_TAG_INTEGER, "job-id", job_id);
         ippAddInteger(response, IPP_TAG_JOB, IPP_TAG_ENUM, "job-state", IPP_JSTATE_HELD);
         break;
@@ -886,6 +937,12 @@ static void handle_request(Standin *standin, ipp_t *request, ipp_t *response) {
         break;
     }
     case IPP_OP_CANCEL_JOB:
+        standin->canceled_job = request_integer(request, "job-id", 0);
+        if (printer < 0) {
+            ippSetStatusCode(response, IPP_STATUS_ERROR_NOT_FOUND);
+        } else if (standin->canceled_job && standin->canceled_job == standin->finished_job) {
+            ippSetStatusCode(response, IPP_STATUS_ERROR_NOT_POSSIBLE);
+        }
         break;
     default:
         ippSetStatusCode(response, IPP_STATUS_ERROR_OPERATION_NOT_SUPPORTED);
@@ -1231,6 +1288,7 @@ static void test_subscriptions(Standin *standin) {
     CHECK(events[0].kind == P1600_EVENT_PRINTER_STOPPED && events[0].sequence == 2);
     CHECK(events[1].kind == P1600_EVENT_JOB_COMPLETED && events[1].job_id == 7 && events[1].sequence == 3);
     CHECK(strcmp(events[1].queue, TEST_QUEUE) == 0);  /* from notify-printer-uri */
+    CHECK(!events[1].levels_job && p1600_notify_event_wants_levels(&events[1], 0));
     CHECK(sequence == 4);
     CHECK(p1600_notify_wait(http, id, &sequence, 5, events, 8) == 2);
     CHECK(events[0].kind == P1600_EVENT_OTHER && events[1].kind == P1600_EVENT_PRINTER_STATE_CHANGED && sequence == 6);
@@ -1256,6 +1314,20 @@ static void test_subscriptions(Standin *standin) {
     pthread_join(pusher, NULL);
     CHECK(elapsed >= 0.15 && elapsed < 2.0 && sequence == 8);
     set_option(standin, &standin->hold_ms, 300);
+
+    /* A toner query's own end (job-name ReportLevels) brings no query. */
+    standin_lock(standin);
+    standin->job_ids[standin->job_count] = 4242;
+    snprintf(standin->job_names[standin->job_count], sizeof(standin->job_names[0]), "ReportLevels");
+    standin->job_count++;
+    standin_unlock(standin);
+    push_event(standin, TEST_QUEUE, "job-completed", 4242);
+    CHECK(p1600_notify_wait(http, id, &sequence, 5, events, 8) == 1 && sequence == 9);
+    CHECK(events[0].kind == P1600_EVENT_JOB_COMPLETED && events[0].job_id == 4242 && events[0].levels_job);
+    CHECK(!p1600_notify_event_wants_levels(&events[0], 0));
+    standin_lock(standin);
+    standin->job_count--;
+    standin_unlock(standin);
 
     /* Renewal: cupsd may grant less than asked. */
     set_option(standin, &standin->max_lease, 900);
@@ -1372,7 +1444,26 @@ static void test_request_levels(Standin *standin) {
     standin_lock(standin);
     CHECK(standin->operations[IPP_OP_SEND_DOCUMENT] == 1);
     standin_unlock(standin);
+
+    /* An unfinished ReportLevels job is canceled (the printer is off); one
+     * that has finished needs nothing. Not the user's jobs: only `job`. */
+    CHECK(P1600_NOTIFY_LEVELS_TIMEOUT_SECONDS < P1600_NOTIFY_SETTLE_SECONDS);
+    CHECK(p1600_notify_cancel_levels(TEST_QUEUE, job) == P1600_NOTIFY_OK);
+    standin_lock(standin);
+    CHECK(standin->operations[IPP_OP_CANCEL_JOB] == 1 && standin->canceled_job == job);
+    CHECK(strstr(standin->printer_uri, "/printers/" TEST_QUEUE) != NULL);
+    standin->finished_job = job;
+    standin_unlock(standin);
+    CHECK(p1600_notify_cancel_levels(TEST_QUEUE, job) == P1600_NOTIFY_OK);
+    CHECK(p1600_notify_cancel_levels("P1600DN_No_Such_Queue", job) == P1600_NOTIFY_NOT_FOUND);
+    CHECK(p1600_notify_cancel_levels(TEST_QUEUE, 0) == P1600_NOTIFY_FAILED);
+    CHECK(p1600_notify_cancel_levels("a/b", job) == P1600_NOTIFY_FAILED && p1600_notify_cancel_levels(NULL, job) == P1600_NOTIFY_FAILED);
+    standin_lock(standin);
+    CHECK(standin->operations[IPP_OP_CANCEL_JOB] == 3);
+    standin->finished_job = 0;
+    standin_unlock(standin);
     puts("[PASS] ReportLevels: Create-Job + Send-Document, application/vnd.cups-command, 27-byte command file, errors");
+    puts("[PASS] ReportLevels: an unfinished job is canceled before its connecting-to-device could be noticed");
 }
 
 #define WATCHERS 4
@@ -1514,13 +1605,16 @@ static bool step(Standin *standin, const char *what, int state, const char *reas
 static int serve(const char *port_file, const char *scenario) {
     static Standin standin;
     const bool main_scenario = strcmp(scenario, "main") == 0;
-    if (!main_scenario && strcmp(scenario, "persist") != 0) {
+    const bool utility_scenario = strcmp(scenario, "utility") == 0;
+    if (!main_scenario && !utility_scenario && strcmp(scenario, "persist") != 0) {
         fprintf(stderr, "Unknown scenario \"%s\"\n", scenario);
         return 2;
     }
     standin_start(&standin, 0);
     if (main_scenario) {
         set_printer(&standin, TEST_QUEUE, 3, "", "", 40);
+    } else if (utility_scenario) {
+        set_printer(&standin, TEST_QUEUE, 3, "", "", 62);
     } else {
         /* After the restart the stack still waits for the Go button (reported
          * before the restart), and the toner level is not known yet. */
@@ -1528,6 +1622,8 @@ static int serve(const char *port_file, const char *scenario) {
     }
     standin_lock(&standin);
     snprintf(standin.printers[0].info, sizeof(standin.printers[0].info), "Office P1606dn");
+    snprintf(standin.printers[0].make_model, sizeof(standin.printers[0].make_model),
+             "HP LaserJet Professional P1600dn Series (Native ARM64)");
     if (main_scenario) standin.on_command = report_levels_hook;
     standin.hold_ms = 5000;  /* a real long poll */
     standin_unlock(&standin);
@@ -1539,6 +1635,37 @@ static int serve(const char *port_file, const char *scenario) {
     fprintf(file, "%d\n", standin.port);
     fclose(file);
     CHECK(rename(partial, port_file) == 0);
+
+    if (utility_scenario) {
+        /* The printer utility looks the queue up for its header; then the
+         * printer starts printing with the toner at 12%, and the utility
+         * must look again. It is stopped from outside. */
+        bool ok = false;
+        for (int wait = 0; wait < 1500 && !ok; wait++) {
+            standin_lock(&standin);
+            ok = standin.lookups >= 1;
+            standin_unlock(&standin);
+            if (!ok) pause_ms(20);
+        }
+        pause_ms(500);
+        standin_lock(&standin);
+        int seen = standin.lookups;
+        standin_unlock(&standin);
+        set_printer(&standin, TEST_QUEUE, 4, "", "", 12);
+        bool again = false;
+        for (int wait = 0; ok && wait < 1500 && !again; wait++) {
+            standin_lock(&standin);
+            again = standin.lookups > seen;
+            standin_unlock(&standin);
+            if (!again) pause_ms(20);
+        }
+        ok = ok && again;
+        printf("steps=%s\n", ok ? "ok" : "failed");
+        fflush(stdout);
+        pause_ms(20000);
+        standin_stop(&standin);
+        return ok ? 0 : 1;
+    }
 
     /* The agent subscribes, then takes its first snapshot (priming). */
     bool ok = wait_for_count(&standin, IPP_OP_CREATE_PRINTER_SUBSCRIPTIONS, 1, 60) && wait_for_snapshots(&standin, 1, 30);
@@ -1606,7 +1733,7 @@ int main(int argc, char **argv) {
     if (argc == 4 && strcmp(argv[1], "--serve") == 0) return serve(argv[2], argv[3]);
     if (argc == 3 && strcmp(argv[1], "--real-snapshot") == 0) return real_snapshot(argv[2]);
     if (argc != 1) {
-        fprintf(stderr, "Usage: %s [--serve <port file> <main|persist> | --real-snapshot <queue>]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--serve <port file> <main|persist|utility> | --real-snapshot <queue>]\n", argv[0]);
         return 2;
     }
     test_reasons();
