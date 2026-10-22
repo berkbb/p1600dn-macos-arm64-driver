@@ -9,6 +9,11 @@
  * native, driverless IPP Everywhere / AirPrint network printer on CUPS 3.0,
  * modern Linux distributions, and embedded print servers.
  *
+ * Status: an unfinished draft that cannot print. It does not compile against
+ * libpappl, registers no raster callbacks and never calls the encoder or the
+ * page check; without libpappl it builds as a stub. Printing goes through
+ * rastertop1600dn.
+ *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
