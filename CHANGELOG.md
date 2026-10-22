@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Opening **Options & Supplies** or the utility no longer queues a toner query job again and again: the PPD's `*cupsCommands` no longer lists `ReportLevels`. The notifier still asks for the toner level after printing, and `commandtop1600dn` still answers `ReportLevels`.
+- The AirPrint server no longer restarts every 60 seconds on its own advertisement: printers `cupsGetDests()` finds over Bonjour and driverless queues (`<model>-AirPrint`, `IPP Everywhere`) are no longer P1600dn queues, also in the utility, the notifier and `p1600dn-status`. A moment without cupsd is reported as an error instead of "no queues".
+- A canceled job (cupsd's SIGTERM) stops after the last whole page and is closed with END_DOC, `@PJL EOJ` and `@PJL USTATUSOFF` instead of dying mid-page.
+- Print Density, Jam Recovery, EconoMode and TersKose fall back to the queue PPD's `*Default` value when the job does not set them (settings made with `lpadmin -o`, AirPrint jobs).
+- HTML Config over USB: an idle proxy closes the printer's USB interface and its loopback address at once; pages stay served after the window closes until idle; the Bonjour lookup and stopping an old proxy no longer block the window. Requests from other sites (Host, Origin, Referer, `Sec-Fetch-Site`) are refused with 403; 304, 204, 1xx and HEAD replies end with their header; a late reply after a failed exchange is dropped.
+- AirPrint: a raster document may decode to at most 32 GiB and a PDF be at most 1 GiB, and Cancel-Job and shutdown stop the conversion between pages; at most 8 connections from one address and 10 seconds for a request header; uploads cut off or stalled are refused; uploads under way count against the queue limit; Bonjour is retried when unavailable at the start; `orientation-requested` 4/5 is passed on only for JPEG, PNG and landscape PDF pages; `print-scaling=fit` draws raster pages into the printable area; gzip documents of several members and zlib deflate with a one-byte first read are read correctly.
+- The utility: a printer that answers no INQUIRE leaves the settings disabled with Try Again; the header's state and toner level are looked up again every 5 seconds; a running utility switches to the printer of a later Open Application event.
+- The notifier: its own ReportLevels job is canceled after 12 seconds when unfinished (printer off); a toner query due within 30 minutes is put off, not dropped; the end of a ReportLevels job brings no new query; a toner level that fell while the agent was not watching is reported at its first observation.
+- Diagnostic page: named and printed at the queue's resolution; the bottom bar ends clear of the corner marks.
+- The manager: the first install asks before it removes Gutenprint (`--install --yes` does not ask); signed binaries are replaced (`rm -f`, then `cp`) instead of overwritten; the install folder is 755 under any umask; the apps are readable by every user and registered with Launch Services; the notifier is handled in every GUI session; `build/` goes back to the sudo user also when `--install` stops halfway; Add Queue refuses an existing queue name; uninstall also removes the OpenPrinting fallback's `COPYING`; the AirPrint duplicate-printer warning shows only while Printer Sharing is on; driver 5.0's paths follow `INSTALL_DIR`, so tests never touch `/Library`.
+- Tests: UBSan errors stop `make test-sanitize`, which now builds what it runs; the `--self-test` source checks can fail; the test PPDs name the filter through a short link, so `make test` works from long folder paths; each CLI action and alias is checked alone.
+
+### Changed
+- `README.md` and `DEVELOPMENT.md`: the PAPPL adapter is an unfinished draft that cannot print; engine error notices appear at once; where ReportLevels comes from.
+
 ## [6.0.0] - 2026-10-16
 
 The first published release: a native Apple Silicon (arm64) CUPS driver for macOS 11 and later.

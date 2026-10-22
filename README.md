@@ -51,7 +51,7 @@ All models are automatically discovered via macOS Bonjour or USB plug-and-play u
   Where the printer reports a state, the text is the PPD's message for it. Each notice is shown once, not repeated after a restart. A click opens the printer utility for that printer.
 - **Toner Level**: `commandtop1600dn` answers CUPS `ReportLevels` requests: USB printers are asked for the printer's LEDM consumables document over their vendor USB interface, network printers through Apple's `snmpInk`.
 - **Status & Supply Monitoring**: Real-time CUPS/IPP printer state and device supply level querying (`--en` / `--tr`).
-- **Gutenprint Removed Automatically**: Gutenprint has no P1600dn driver, and this driver replaces it. The first installation and every uninstallation remove it without asking; P1600dn queues still on it are switched to this driver, and Gutenprint stays only while another printer prints through it.
+- **Gutenprint Removal**: Gutenprint has no P1600dn driver, and this driver replaces it. The first installation asks before it removes it (`--install --yes` does not ask), and every uninstallation removes it; P1600dn queues still on it are switched to this driver, and Gutenprint stays only while another printer prints through it.
 
 ---
 
@@ -208,7 +208,7 @@ If you omit the queue argument, the tool interactively lists available queues. I
 
 If the device connection does not report supply levels, the utility avoids guessing and cleanly reports "unknown".
 
-The toner level comes from the printer itself: when macOS or `lpadmin` sends the queue a `ReportLevels` command (for example from **Printers & Scanners → Supply Levels**), `commandtop1600dn` asks the printer and stores the result as the queue's `marker-levels`, which the status utility then shows. USB printers answer only if they expose the LEDM interface (USB class `FF/02/10`).
+The toner level comes from the printer itself: when the notifier (after printing) or `lpadmin` sends the queue a `ReportLevels` command, `commandtop1600dn` asks the printer and stores the result as the queue's `marker-levels`, which the status utility then shows. USB printers answer only if they expose the LEDM interface (USB class `FF/02/10`). The PPD's `*cupsCommands` does not list `ReportLevels`: macOS would otherwise queue a toner query job again and again while **Options & Supplies** or the utility is open.
 
 ---
 
@@ -293,7 +293,8 @@ It follows every P1600dn queue through CUPS and notifies:
 |---|---|
 | Out of paper, paper jam, cover or door open | The driver's message from the PPD in your language (e.g. *Out of Paper: Refill the paper tray, then press Go on the printer.*) |
 | Manual feed, manual duplex | The driver's message (*Manual Duplex: For the second sides, move the printed sheets from the output bin to Tray 1, printed side down, then press Go on the printer.*) |
-| Engine error, printer unreachable | After 15 seconds, so the moment a job connects does not count |
+| Engine error | At once, with the driver's message |
+| Printer unreachable | After 15 seconds, so the moment a job connects does not count |
 | Toner 15 % or less, 5 % or less, empty | Once per level; the toner level is refreshed through the driver after printing (at most every 30 minutes) |
 | New cartridge | When the level rises from 15 % or less to over 50 % |
 
@@ -307,7 +308,7 @@ Earlier versions could also install the OpenPrinting `foo2zjs` encoder as a fall
 
 Installing or uninstalling the driver cleans up an old fallback installation. Queues that still use its PPD are switched to the native driver; their names and connections stay the same.
 
-The OpenPrinting PAPPL Printer Application adapter (`src/pappl_p1600dn.c`, `make pappl`, `./p1600dn_manager.command --build-pappl`) is kept for a future submission to OpenPrinting. It builds on the native encoder; when it is completed, its pages must go through the page check (`zjs_encode_page_checked()`) like every other path. `DISTRIBUTION_GUIDE.md` describes it.
+The OpenPrinting PAPPL Printer Application adapter (`src/pappl_p1600dn.c`, `make pappl`, `./p1600dn_manager.command --build-pappl`) is an unfinished draft that cannot print: it registers no raster callbacks and, without libpappl, builds as a stub. It is kept for a future submission to OpenPrinting; when it is completed, its pages must go through the page check (`zjs_encode_page_checked()`) like every other path. `DISTRIBUTION_GUIDE.md` describes it.
 
 ---
 
@@ -321,9 +322,9 @@ Removes the native driver binaries, the utility, the notifier and AirPrint, the 
 
 ### Gutenprint
 
-Gutenprint has no P1600dn driver. At best a network queue printed PCL through another model (HP LaserJet 1160), without the printer's duplex, paper codes, status or the page check. This driver replaces it, so it is removed without a separate question:
+Gutenprint has no P1600dn driver. At best a network queue printed PCL through another model (HP LaserJet 1160), without the printer's duplex, paper codes, status or the page check. This driver replaces it, so it is removed:
 
-- on the first installation (not when the driver is reinstalled or updated);
+- on the first installation, once you agree (`--install --yes` agrees; a reinstall or update leaves it alone);
 - on every uninstallation.
 
 Its package receipts are forgotten and its driver, filters, PPDs and tools are deleted. P1600dn queues that still use it are switched to this driver first, with their names and connections kept; a queue counts as a P1600dn queue when its name or device URI names a P1600dn model. While another printer prints through Gutenprint, Gutenprint stays and the manager names that queue.
@@ -359,7 +360,7 @@ p1600dn-macos-driver/
 │   ├── jbig_ar.c / jbig_ar.h             Arithmetic coder
 │   ├── p1600_raster.c / p1600_raster.h         CUPS raster validation, paper codes and page rendering
 │   ├── p1600_screen.c / p1600_screen.h         Halftone screening, NEON and scalar (own tables from tools/gen_screens.py)
-│   ├── pappl_p1600dn.c                 OpenPrinting PAPPL Printer Application adapter (for a future submission)
+│   ├── pappl_p1600dn.c                 OpenPrinting PAPPL Printer Application adapter (unfinished draft)
 │   ├── rastertop1600dn.c               Native CUPS raster filter entry point
 │   ├── zjs.h                             ZjStream wire structures and protocol definitions
 │   ├── zjs_encoder.c / zjs_encoder.h     PJL/ZjStream stream serializer
