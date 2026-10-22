@@ -2,11 +2,11 @@
 
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20(ARM64)-black.svg?logo=apple)](https://apple.com)
 [![Architecture](https://img.shields.io/badge/Architecture-Native%20ARM64-blue.svg)]()
-[![License](https://img.shields.io/badge/License-GPL--2.0--or--later-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 
 Native Apple Silicon (`arm64`) CUPS raster driver exclusively for the **HP LaserJet Professional P1600dn Series** (P1606dn, P1607dn, P1608dn, P1609dn). It writes the printer's PJL/ZjStream print job — halftoning, PJL framing, ZjStream page items, JBIG chunking and duplex page order — in modern native ARM64 C, without Rosetta, Homebrew, or third-party runtime libraries. The job format was learned by static analysis of the printer maker's macOS driver, without running it, and is documented in `reference/zjstream/ZJS_STREAM_SPEC.md`.
 
-License: GPL-2.0-or-later. See `LICENSE` and `NOTICE` for details.
+License: GPL-3.0-or-later. See `LICENSE` and `NOTICE` for details.
 
 > HP and LaserJet are trademarks of HP Inc. This project is an independent driver for these printers; it is not affiliated with, endorsed by or sponsored by HP Inc. Product names are used only to identify the printers it supports.
 
@@ -376,7 +376,7 @@ p1600dn-macos-driver/
 ├── GUTENPRINT_PORT_PLAN.md               Gutenprint compatibility and port analysis
 ├── p1600dn_manager.command           Bilingual interactive manager, installer, and queue tool (Finder)
 ├── p1600dn_manager.sh                Terminal shell script for manager, installer, and queue tool
-├── LICENSE                               GPL-2.0-or-later license
+├── LICENSE                               GPL-3.0-or-later license
 ├── Makefile                              Native ARM64 build and test harness
 ├── NOTICE                                Attribution and copyright notice
 └── README.md                             User guide and documentation
@@ -386,7 +386,7 @@ p1600dn-macos-driver/
 
 ## License
 
-GPL-2.0-or-later. See `LICENSE` and `NOTICE` files for full licensing terms. The embedded JBIG-KIT encoder is licensed under GPL-2.0-or-later.
+Copyright © 2026 berkbb. GPL-3.0-or-later. See `LICENSE` and `NOTICE` files for full licensing terms. The embedded JBIG-KIT encoder is licensed under GPL-2.0-or-later, which allows its use under GPL-3.0.
 
 ## Trademarks
 

@@ -14,7 +14,7 @@
  * page check; without libpappl it builds as a stub. Printing goes through
  * rastertop1600dn.
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #ifdef HAVE_PAPPL

@@ -17,10 +17,10 @@ This document outlines the step-by-step integration and distribution workflows f
 ## 1. Strategic Overview & Licensing
 
 - **Driver Architecture:** Pure C11, zero external dynamic library dependencies (Zero Bloat), native Apple Silicon (`arm64`) 64-bit Mach-O binary.
-- **Licensing:** **GNU General Public License v2 (GPL-2.0-or-later)**.
+- **Licensing:** **GNU General Public License v3 (GPL-3.0-or-later)**.
   - The driver statically embeds Markus Kuhn's open-source **JBIG-KIT** (`src/jbig.c`, `src/jbig_ar.c`) for ITU-T T.82 JBIG encoding.
-  - Due to GPLv2 copyleft terms, the entire project is distributed under GPL-2.0-or-later.
-  - Dynamic linking against Apple's `libcups` (Apache 2.0 with GPL2 Exception) is fully compliant.
+  - JBIG-KIT is GPL-2.0-or-later, which allows its use under GPL-3.0; the entire project is distributed under GPL-3.0-or-later.
+  - Dynamic linking against Apple's `libcups` (Apache 2.0, compatible with GPL-3.0) is fully compliant.
 - **Code and Data Provenance:**
   - The job format was learned by static analysis of the printer maker's macOS driver (`reference/zjstream/ZJS_STREAM_SPEC.md`); none of that driver's code, tables, texts or data is in the repository or its published history.
   - The halftone screens are the project's own (`tools/gen_screens.py` generates `src/p1600_screen_tables.h`): 45° round dots that grow into crosses and meet in a checkerboard at 600 dpi, elliptical dots with soft edges of partial toner levels (about 18 partial pixels per 12 × 12 tile), chains in the midtones and round holes in a solid net in the dark tones in FastRes 1200, in the job format's screen geometry (8 dots per 16 × 16 or 12 × 12 tile), with a tone curve of its own (a Bernstein polynomial with a few constants, chosen during development so that grays print at their target darkness, within 2% coverage).

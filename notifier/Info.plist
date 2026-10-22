@@ -50,7 +50,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Printer status notifications for the HP LaserJet Professional P1600dn series. GPL-2.0-or-later.</string>
+	<string>Copyright © 2026 berkbb. P1600dn Notifier. GPL-3.0-or-later.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

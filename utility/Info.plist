@@ -48,7 +48,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Native ARM64 port of HP LaserJet Professional Utility for the P1600dn series. GPL-2.0-or-later.</string>
+	<string>Copyright © 2026 berkbb. P1600dn Series Utility. GPL-3.0-or-later.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>
