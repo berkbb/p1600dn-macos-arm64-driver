@@ -104,7 +104,13 @@ stop_daemon() {
 
 echo "[*] AirPrint end-to-end tests ($(basename "$daemon"))"
 
-# 1. The project PPD with the given driver filter and without the command filter.
+# 1. The project PPD with the given driver filter and without the command
+# filter. cupsfilter refuses PPD lines over 255 bytes: a driver folder with
+# a long path names the filter through a short link.
+if [ "$(printf '%s' "$filter" | wc -c)" -gt 150 ]; then
+    ln -s "$filter" "$test_root/rastertop1600dn" || fail "could not link the filter"
+    filter="$test_root/rastertop1600dn"
+fi
 test_ppd="$test_root/test.ppd"
 awk -v filter="$filter" '
     index($0, "*cupsFilter:") == 1 {

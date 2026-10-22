@@ -22,7 +22,13 @@
 #define P1600_AIR_DEFAULT_PORT 8632
 #define P1600_AIR_MAX_QUEUES 16
 #define P1600_AIR_MAX_CLIENTS 32
+/* One device (by address) cannot take every connection, and a request's
+ * line and header fields must arrive within P1600_AIR_HEADER_SECONDS in all
+ * (a byte every few seconds would otherwise hold a connection for ever). */
+#define P1600_AIR_MAX_CLIENTS_PER_HOST 8
+#define P1600_AIR_HEADER_SECONDS 10
 #define P1600_AIR_IDLE_SECONDS 30
+#define P1600_AIR_DNSSD_RETRY_SECONDS 10
 #define P1600_AIR_DOCUMENT_LIMIT ((size_t)256 * 1024 * 1024)
 #define P1600_AIR_IPP_LIMIT ((size_t)1024 * 1024)
 #define P1600_AIR_JOB_HISTORY 200
@@ -133,6 +139,11 @@ typedef struct {
     P1600AirCups cups;
     P1600AirQueueSpec queues[P1600_AIR_MAX_QUEUES];
     int queue_count;
+    int max_clients_per_host;   /* 0: P1600_AIR_MAX_CLIENTS_PER_HOST */
+    int header_seconds;         /* 0: P1600_AIR_HEADER_SECONDS */
+    int dnssd_retry_seconds;    /* Bonjour unavailable or lost: next try; 0: P1600_AIR_DNSSD_RETRY_SECONDS */
+    uint64_t max_raster_bytes;  /* decoded URF/PWG pages per document; 0: P1600_RASTER_MAX_DOCUMENT_BYTES */
+    size_t queue_limit;         /* document bytes waiting or being received; 0: P1600_AIR_QUEUE_LIMIT */
 } P1600AirConfig;
 
 typedef struct P1600AirServer P1600AirServer;

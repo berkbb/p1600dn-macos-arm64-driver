@@ -12,6 +12,7 @@
  *        test_airprint --write-pwg OUT sgray_8|srgb_8 DPI PAGES   (sample for test_airprint.sh)
  */
 #include <arpa/inet.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
@@ -510,6 +511,11 @@ static int temp_file(const char *name, char *path, size_t size) {
     return open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
 }
 
+static bool stop_on_second_page(void *context) {
+    int *calls = context;
+    return ++*calls >= 2;
+}
+
 static void test_pdf(void) {
     char error[256], path[1024], in_path[1024];
     /* URF: A4 at 300 dpi (2480 x 3508) and 150 x 75 sRGB at 150 dpi. */
@@ -524,7 +530,7 @@ static void test_pdf(void) {
     CHECK(in_fd >= 0 && write(in_fd, urf.data, urf.length) == (ssize_t)urf.length && lseek(in_fd, 0, SEEK_SET) == 0);
     int pdf_fd = temp_file("out.pdf", path, sizeof(path));
     P1600RasterSummary summary;
-    CHECK(p1600_raster_to_pdf(P1600_RASTER_FORMAT_URF, in_fd, pdf_fd, &summary, error, sizeof(error)) == 2);
+    CHECK(p1600_raster_to_pdf(P1600_RASTER_FORMAT_URF, in_fd, pdf_fd, NULL, &summary, error, sizeof(error)) == 2);
     close(in_fd);
     close(pdf_fd);
     CHECK(summary.pages == 2 && near(summary.width_points, 2480 * 72.0 / 300) && summary.dpi_x == 300);
@@ -543,7 +549,7 @@ static void test_pdf(void) {
     in_fd = temp_file("in.urf", in_path, sizeof(in_path));
     CHECK(write(in_fd, urf.data, urf.length) == (ssize_t)urf.length && lseek(in_fd, 0, SEEK_SET) == 0);
     pdf_fd = temp_file("out.pdf", path, sizeof(path));
-    CHECK(p1600_raster_to_pdf(P1600_RASTER_FORMAT_URF, in_fd, pdf_fd, &summary, error, sizeof(error)) < 0);
+    CHECK(p1600_raster_to_pdf(P1600_RASTER_FORMAT_URF, in_fd, pdf_fd, NULL, &summary, error, sizeof(error)) < 0);
     CHECK(strstr(error, "page 2") != NULL);
     close(in_fd);
     close(pdf_fd);
@@ -564,11 +570,34 @@ static void test_pdf(void) {
     in_fd = temp_file("in.pwg", in_path, sizeof(in_path));
     CHECK(write(in_fd, pwg.data, pwg.length) == (ssize_t)pwg.length && lseek(in_fd, 0, SEEK_SET) == 0);
     pdf_fd = temp_file("out.pdf", path, sizeof(path));
-    CHECK(p1600_raster_to_pdf(P1600_RASTER_FORMAT_PWG, in_fd, pdf_fd, &summary, error, sizeof(error)) == 3);
-    close(in_fd);
+    CHECK(p1600_raster_to_pdf(P1600_RASTER_FORMAT_PWG, in_fd, pdf_fd, NULL, &summary, error, sizeof(error)) == 3);
     close(pdf_fd);
     CHECK(pdf_info(path, &info) && info.count == 3);
     for (int i = 0; i < 3; i++) CHECK(near(info.boxes[i].size.width, 612) && near(info.boxes[i].size.height, 792));
+
+    /* Limits of a whole document: the pixels of all its pages, its PDF, and a
+     * stop between pages (Cancel-Job, the shutdown). */
+    const struct {
+        P1600RasterLimits limits;
+        const char *reason;
+    } limited[] = {
+        {{.max_decoded_bytes = 2ULL * 5100 * 6600}, "its pages need more than"},
+        {{.max_pdf_bytes = 1}, "its PDF is larger than"},
+        {{.stop = stop_on_second_page}, "was stopped"},
+    };
+    for (size_t i = 0; i < sizeof(limited) / sizeof(limited[0]); i++) {
+        int calls = 0;
+        P1600RasterLimits limits = limited[i].limits;
+        if (limits.stop) limits.context = &calls;
+        CHECK(lseek(in_fd, 0, SEEK_SET) == 0);
+        pdf_fd = temp_file("out.pdf", path, sizeof(path));
+        CHECK(p1600_raster_to_pdf(P1600_RASTER_FORMAT_PWG, in_fd, pdf_fd, &limits, &summary, error, sizeof(error)) < 0);
+        CHECK(strstr(error, limited[i].reason) != NULL);
+        CHECK(summary.pages <= 2);
+        close(pdf_fd);
+        if (limits.stop) CHECK(calls == 2);
+    }
+    close(in_fd);
     free(pwg.data);
 
     /* The writer refuses empty documents and bad pages. */
@@ -581,6 +610,7 @@ static void test_pdf(void) {
     close(pdf_fd);
     CHECK(p1600_pdf_writer_open(-1, error, sizeof(error)) == NULL);
     puts("[PASS] PDF writer: page count and page sizes (pixels x 72 / dpi) checked with CGPDFDocument");
+    puts("[PASS] Raster to PDF: limits for the pixels of all pages and the PDF size, stop between pages");
 }
 
 /* --- media, formats, options, Bonjour ------------------------------------------------ */
@@ -1017,6 +1047,8 @@ static void test_server_spool(void) {
     config.spool_dir = spool;
     config.icon_path = "assets/P1600dnPrinter.png";
     config.queue_count = 1;
+    /* Every test connection comes from this host. */
+    config.max_clients_per_host = P1600_AIR_MAX_CLIENTS;
     snprintf(config.queues[0].name, sizeof(config.queues[0].name), "TestQ");
     snprintf(config.queues[0].make_model, sizeof(config.queues[0].make_model), "HP LaserJet Professional P1606dn");
     RunningServer running;
@@ -1604,6 +1636,486 @@ static bool fake_options(FakeCups *fake, const char *needle) {
     return found;
 }
 
+/* The limits one client cannot get around: connections per address, the
+ * time for a request header, and the pixels of a raster document. */
+static void test_server_limits(void) {
+    char spool[1100];
+    snprintf(spool, sizeof(spool), "%s/spool-limits", temp_root);
+    CHECK(mkdir(spool, 0700) == 0);
+    P1600AirConfig config;
+    memset(&config, 0, sizeof(config));
+    config.loopback = true;
+    config.spool_dir = spool;
+    config.icon_path = "assets/P1600dnPrinter.png";
+    config.queue_count = 1;
+    config.header_seconds = 1;
+    config.max_raster_bytes = 1240U * 1748U - 1U;  /* less than one A6 page at 300 dpi */
+    snprintf(config.queues[0].name, sizeof(config.queues[0].name), "TestQ");
+    snprintf(config.queues[0].make_model, sizeof(config.queues[0].make_model), "HP LaserJet Professional P1606dn");
+    RunningServer running;
+    server_start(&running, &config);
+    int port = p1600_air_server_port(running.server);
+    CHECK(port > 0);
+
+    /* P1600_AIR_MAX_CLIENTS_PER_HOST connections from one address; one more is
+     * closed at once. */
+    int sockets[P1600_AIR_MAX_CLIENTS_PER_HOST + 1];
+    for (int i = 0; i <= P1600_AIR_MAX_CLIENTS_PER_HOST; i++) sockets[i] = connect_raw(port);
+    int refused = 0;
+    for (int i = 0; i <= P1600_AIR_MAX_CLIENTS_PER_HOST; i++) {
+        struct pollfd channel = {.fd = sockets[i], .events = POLLIN};
+        char byte;
+        if (poll(&channel, 1, i == 0 ? 3000 : 100) == 1 && recv(sockets[i], &byte, 1, 0) == 0) refused++;
+    }
+    CHECK(refused == 1);
+    for (int i = 0; i <= P1600_AIR_MAX_CLIENTS_PER_HOST; i++) close(sockets[i]);
+    usleep(1500000);  /* the server reaps the closed connections */
+    puts("[PASS] HTTP: at most 8 connections from one address");
+
+    /* A header that keeps trickling in is cut after header_seconds. */
+    int slow = connect_raw(port);
+    static const char start[] = "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Slow: ";
+    CHECK(send(slow, start, sizeof(start) - 1, 0) == (ssize_t)(sizeof(start) - 1));
+    struct timespec began, now;
+    clock_gettime(CLOCK_MONOTONIC, &began);
+    bool closed = false;
+    double elapsed = 0.0;
+    while (!closed && elapsed < 8.0) {
+        usleep(200000);
+        struct pollfd channel = {.fd = slow, .events = POLLIN};
+        char byte;
+        if (send(slow, "a", 1, 0) != 1 || (poll(&channel, 1, 0) == 1 && recv(slow, &byte, 1, 0) <= 0)) closed = true;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        elapsed = (double)(now.tv_sec - began.tv_sec) + (double)(now.tv_nsec - began.tv_nsec) / 1e9;
+    }
+    close(slow);
+    CHECK(closed && elapsed >= 0.9 && elapsed < 5.0);
+    Bytes out = {0};
+    CHECK(raw_get(port, "GET", "/", &out) == 200);
+    free(out.data);
+    puts("[PASS] HTTP: a request header still arriving after its time limit closes the connection");
+
+    /* A URF document whose pages need more pixels than allowed aborts. */
+    Bytes urf = {0};
+    urf_file_header(&urf, 1);
+    unsigned char *a6 = pattern(1240, 1748, 1, 12);
+    urf_page_header(&urf, 8, 0, 1240, 1748, 300);
+    urf_encode(&urf, a6, 1240, 1748, 1);
+    ipp_status_t status;
+    int id = print_document(port, "image/urf", NULL, urf.data, urf.length, &status, NULL);
+    CHECK(status == IPP_STATUS_OK && wait_job(port, id, IPP_JSTATE_CANCELED) == IPP_JSTATE_ABORTED);
+    free(a6);
+    free(urf.data);
+    puts("[PASS] IPP: a raster document beyond the pixel limit aborts");
+    server_stop(&running);
+}
+
+/* Bonjour that is not there when the server starts: p1600_airprint.c's calls to
+ * DNSServiceCreateConnection() bind to this stand-in (libcups keeps the
+ * system's). While `bonjour_down` is set it fails and counts the calls;
+ * otherwise it passes the call on. */
+static atomic_bool bonjour_down;
+static atomic_int bonjour_calls;
+
+DNSServiceErrorType DNSSD_API DNSServiceCreateConnection(DNSServiceRef *ref) {
+    if (atomic_load(&bonjour_down)) {
+        atomic_fetch_add(&bonjour_calls, 1);
+        if (ref) *ref = NULL;
+        return kDNSServiceErr_ServiceNotRunning;
+    }
+    DNSServiceErrorType (*real)(DNSServiceRef *) = NULL;
+    void *symbol = dlsym(RTLD_NEXT, "DNSServiceCreateConnection");
+    if (!symbol) return kDNSServiceErr_ServiceNotRunning;
+    memcpy(&real, &symbol, sizeof(real));
+    return real(ref);
+}
+
+static void test_bonjour_retry(void) {
+    char spool[1100];
+    snprintf(spool, sizeof(spool), "%s/spool-bonjour", temp_root);
+    CHECK(mkdir(spool, 0700) == 0);
+    P1600AirConfig config;
+    memset(&config, 0, sizeof(config));
+    config.loopback = true;
+    config.dnssd = true;
+    config.local_only = true;
+    config.dnssd_retry_seconds = 1;
+    config.spool_dir = spool;
+    config.icon_path = "assets/P1600dnPrinter.png";
+    config.queue_count = 1;
+    snprintf(config.queues[0].name, sizeof(config.queues[0].name), "TestQ");
+    snprintf(config.queues[0].make_model, sizeof(config.queues[0].make_model), "HP LaserJet Professional P1606dn");
+    atomic_store(&bonjour_calls, 0);
+    atomic_store(&bonjour_down, true);
+    RunningServer running;
+    server_start(&running, &config);
+    for (int wait = 0; wait < 80 && atomic_load(&bonjour_calls) < 2; wait++) usleep(100000);
+    int calls = atomic_load(&bonjour_calls);
+    server_stop(&running);
+    atomic_store(&bonjour_down, false);
+    if (calls < 2) fprintf(stderr, "Bonjour was asked %d time(s)\n", calls);
+    CHECK(calls >= 2);
+    puts("[PASS] Bonjour unavailable at the start: the server tries again instead of staying unseen");
+}
+
+/* --- uploads: incomplete bodies, gzip members, deflate framing, orientation, fit, queue -------- */
+
+/* A spool-mode server of its own (job ids start at 1). */
+static int upload_server(RunningServer *running, P1600AirConfig *config, const char *name, char *spool, size_t size) {
+    snprintf(spool, size, "%s/%s", temp_root, name);
+    CHECK(mkdir(spool, 0700) == 0);
+    memset(config, 0, sizeof(*config));
+    config->loopback = true;
+    config->spool_dir = spool;
+    config->queue_count = 1;
+    config->max_clients_per_host = P1600_AIR_MAX_CLIENTS;
+    snprintf(config->queues[0].name, sizeof(config->queues[0].name), "TestQ");
+    snprintf(config->queues[0].make_model, sizeof(config->queues[0].make_model), "HP LaserJet Professional P1606dn");
+    server_start(running, config);
+    int port = p1600_air_server_port(running->server);
+    CHECK(port > 0);
+    return port;
+}
+
+/* The IPP message of a Print-Job, as a client sends it before the document. */
+static void print_job_message(int port, const char *format, const char *compression, Bytes *out) {
+    ipp_t *request = new_request(IPP_OP_PRINT_JOB, port, "/ipp/print/TestQ");
+    ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_NAME, "job-name", NULL, "upload test");
+    ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL, format);
+    if (compression) ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_KEYWORD, "compression", NULL, compression);
+    out->length = 0;
+    ippSetState(request, IPP_STATE_IDLE);
+    CHECK(ippWriteIO(out, (ipp_iocb_t)bytes_write, 1, NULL, request) == IPP_STATE_DATA);
+    ippDelete(request);
+}
+
+static void http_chunk(Bytes *out, const void *data, size_t length) {
+    char size[32];
+    int n = snprintf(size, sizeof(size), "%zx\r\n", length);
+    bytes_add(out, size, (size_t)n);
+    bytes_add(out, data, length);
+    bytes_add(out, "\r\n", 2);
+}
+
+static void post_head(Bytes *out, int port, long long content_length) {
+    char head[300];
+    int n = content_length < 0
+                ? snprintf(head, sizeof(head), "POST /ipp/print/TestQ HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                                               "Content-Type: application/ipp\r\nTransfer-Encoding: chunked\r\n\r\n", port)
+                : snprintf(head, sizeof(head), "POST /ipp/print/TestQ HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                                               "Content-Type: application/ipp\r\nContent-Length: %lld\r\n\r\n", port,
+                           content_length);
+    bytes_add(out, head, (size_t)n);
+}
+
+static void raw_send_all(int fd, const void *data, size_t length) {
+    const unsigned char *bytes = data;
+    while (length > 0) {
+        ssize_t sent = send(fd, bytes, length, 0);
+        if (sent <= 0) return;  /* the server may have closed the connection */
+        bytes += sent;
+        length -= (size_t)sent;
+    }
+}
+
+/* The IPP status of the response on `fd` (read to its end), -1 without one. */
+static int raw_response_status(int fd) {
+    Bytes in = {0};
+    for (;;) {
+        struct pollfd channel = {.fd = fd, .events = POLLIN};
+        if (poll(&channel, 1, 15000) <= 0) break;
+        unsigned char buffer[4096];
+        ssize_t count = recv(fd, buffer, sizeof(buffer), 0);
+        if (count <= 0) break;
+        bytes_add(&in, buffer, (size_t)count);
+    }
+    const unsigned char *body = in.length ? memmem(in.data, in.length, "\r\n\r\n", 4) : NULL;
+    int status = body && (size_t)(body + 8 - in.data) <= in.length ? (body[6] << 8) | body[7] : -1;
+    free(in.data);
+    return status;
+}
+
+/* A PDF of `length` bytes. */
+static void padded_pdf(Bytes *out, size_t length) {
+    out->length = 0;
+    bytes_add(out, tiny_pdf, sizeof(tiny_pdf) - 1);
+    while (out->length < length) bytes_add(out, "% padding\n", 10);
+}
+
+static int spooled_jobs(const char *spool) {
+    int count = 0;
+    for (int id = 1; id < 50; id++) {
+        char path[1200];
+        snprintf(path, sizeof(path), "%s/job-%d.options", spool, id);
+        if (access(path, F_OK) == 0) count++;
+    }
+    return count;
+}
+
+static bool spooled_equal(const char *spool, int id, const Bytes *expected) {
+    char path[1200];
+    Bytes copy = {0};
+    snprintf(path, sizeof(path), "%s/job-%d.pdf", spool, id);
+    for (int i = 0; i < 100 && access(path, F_OK) != 0; i++) usleep(20000);
+    bool ok = read_file(path, &copy) && copy.length == expected->length &&
+              memcmp(copy.data, expected->data, expected->length) == 0;
+    if (!ok) fprintf(stderr, "job-%d.pdf: %zu bytes, expected %zu\n", id, copy.length, expected->length);
+    free(copy.data);
+    return ok;
+}
+
+/* A body that ends early (client gone, upload stopped) is no document. */
+static void test_upload_cut(void) {
+    RunningServer running;
+    P1600AirConfig config;
+    char spool[1100];
+    int port = upload_server(&running, &config, "spool-cut", spool, sizeof(spool));
+    Bytes doc = {0}, message = {0};
+    padded_pdf(&doc, 20000);
+    print_job_message(port, "application/pdf", NULL, &message);
+    size_t half = doc.length / 2;
+    for (int mode = 0; mode < 3; mode++) {
+        Bytes request = {0};
+        if (mode == 0) {  /* Content-Length for the whole document, half of it sent */
+            post_head(&request, port, (long long)(message.length + doc.length));
+            bytes_add(&request, message.data, message.length);
+            bytes_add(&request, doc.data, half);
+        } else {          /* chunked: cut inside a chunk, or before the final empty chunk */
+            post_head(&request, port, -1);
+            http_chunk(&request, message.data, message.length);
+            if (mode == 1) {
+                char size[32];
+                int n = snprintf(size, sizeof(size), "%zx\r\n", doc.length);
+                bytes_add(&request, size, (size_t)n);
+                bytes_add(&request, doc.data, half);
+            } else {
+                http_chunk(&request, doc.data, half);
+            }
+        }
+        int fd = connect_raw(port);
+        raw_send_all(fd, request.data, request.length);
+        shutdown(fd, SHUT_WR);  /* the client sends nothing more */
+        int status = raw_response_status(fd);
+        close(fd);
+        free(request.data);
+        if (status != IPP_STATUS_ERROR_BAD_REQUEST) fprintf(stderr, "cut upload %d: status 0x%04x\n", mode, status);
+        CHECK(status == IPP_STATUS_ERROR_BAD_REQUEST);
+    }
+    usleep(300000);
+    CHECK(spooled_jobs(spool) == 0);
+    server_stop(&running);
+    free(doc.data);
+    free(message.data);
+    puts("[PASS] IPP: a document cut off (Content-Length or chunked) is refused, no job");
+}
+
+/* gzip members whose boundary falls on a read boundary (an HTTP chunk). */
+static void test_gzip_members(void) {
+    RunningServer running;
+    P1600AirConfig config;
+    char spool[1100];
+    int port = upload_server(&running, &config, "spool-gzip", spool, sizeof(spool));
+    Bytes doc = {0}, message = {0}, first = {0}, second = {0}, m1 = {0}, m2 = {0}, request = {0};
+    padded_pdf(&doc, 20000);
+    bytes_add(&first, doc.data, doc.length / 2);
+    bytes_add(&second, doc.data + doc.length / 2, doc.length - doc.length / 2);
+    compress_bytes(&first, &m1, 31);
+    compress_bytes(&second, &m2, 31);
+    print_job_message(port, "application/pdf", "gzip", &message);
+    post_head(&request, port, -1);
+    http_chunk(&request, message.data, message.length);
+    http_chunk(&request, m1.data, m1.length);
+    http_chunk(&request, m2.data, m2.length);
+    bytes_add(&request, "0\r\n\r\n", 5);
+    int fd = connect_raw(port);
+    raw_send_all(fd, request.data, request.length);
+    int status = raw_response_status(fd);
+    close(fd);
+    CHECK(status == IPP_STATUS_OK && wait_job(port, 1, IPP_JSTATE_COMPLETED) == IPP_JSTATE_COMPLETED);
+    CHECK(spooled_equal(spool, 1, &doc));
+    server_stop(&running);
+    free(doc.data); free(message.data); free(first.data); free(second.data);
+    free(m1.data); free(m2.data); free(request.data);
+    puts("[PASS] IPP: a two-member gzip document split at the member boundary is kept whole");
+}
+
+/* zlib-framed deflate whose first read is a single byte. */
+static void test_deflate_split(void) {
+    RunningServer running;
+    P1600AirConfig config;
+    char spool[1100];
+    int port = upload_server(&running, &config, "spool-deflate", spool, sizeof(spool));
+    Bytes doc = {0}, message = {0}, packed = {0}, request = {0};
+    padded_pdf(&doc, 20000);
+    compress_bytes(&doc, &packed, 15);
+    print_job_message(port, "application/pdf", "deflate", &message);
+    post_head(&request, port, -1);
+    http_chunk(&request, message.data, message.length);
+    http_chunk(&request, packed.data, 1);
+    http_chunk(&request, packed.data + 1, packed.length - 1);
+    bytes_add(&request, "0\r\n\r\n", 5);
+    int fd = connect_raw(port);
+    raw_send_all(fd, request.data, request.length);
+    int status = raw_response_status(fd);
+    close(fd);
+    if (status != IPP_STATUS_OK) fprintf(stderr, "zlib split after 1 byte: status 0x%04x\n", status);
+    CHECK(status == IPP_STATUS_OK && spooled_equal(spool, 1, &doc));
+    server_stop(&running);
+    free(doc.data); free(message.data); free(packed.data); free(request.data);
+    puts("[PASS] IPP: zlib-framed deflate whose first read is one byte");
+}
+
+static void add_landscape(ipp_t *request) {
+    ippAddInteger(request, IPP_TAG_JOB, IPP_TAG_ENUM, "orientation-requested", IPP_ORIENT_LANDSCAPE);
+}
+
+/* orientation-requested 4/5 reaches CUPS only for pages wider than tall. */
+static void test_orientation(void) {
+    RunningServer running;
+    P1600AirConfig config;
+    char spool[1100];
+    int port = upload_server(&running, &config, "spool-orientation", spool, sizeof(spool));
+    ipp_status_t status;
+    Bytes urf = {0};
+    urf_file_header(&urf, 1);
+    unsigned char *a6 = pattern(1240, 1748, 1, 12);
+    urf_page_header(&urf, 8, 0, 1240, 1748, 300);
+    urf_encode(&urf, a6, 1240, 1748, 1);
+    int id = print_document(port, "image/urf", NULL, urf.data, urf.length, &status, add_landscape);
+    CHECK(status == IPP_STATUS_OK && wait_job(port, id, IPP_JSTATE_COMPLETED) == IPP_JSTATE_COMPLETED);
+    CHECK(spooled(spool, id, "options", "PageSize=A6") && !spooled(spool, id, "options", "orientation-requested=4"));
+    id = print_document(port, "application/pdf", NULL, tiny_pdf, sizeof(tiny_pdf) - 1, &status, add_landscape);
+    CHECK(status == IPP_STATUS_OK && wait_job(port, id, IPP_JSTATE_COMPLETED) == IPP_JSTATE_COMPLETED);
+    CHECK(!spooled(spool, id, "options", "orientation-requested=4"));  /* 595 x 842 */
+    static const char wide_pdf[] =
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+        "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+        "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] >> endobj\n"
+        "trailer << /Root 1 0 R >>\n%%EOF\n";
+    id = print_document(port, "application/pdf", NULL, wide_pdf, sizeof(wide_pdf) - 1, &status, add_landscape);
+    CHECK(status == IPP_STATUS_OK && wait_job(port, id, IPP_JSTATE_COMPLETED) == IPP_JSTATE_COMPLETED);
+    CHECK(spooled(spool, id, "options", "orientation-requested=4"));
+    server_stop(&running);
+    free(a6);
+    free(urf.data);
+    puts("[PASS] IPP: orientation-requested 4 dropped for URF and a portrait PDF, kept for a landscape PDF");
+}
+
+static void add_fit(ipp_t *request) {
+    ippAddString(request, IPP_TAG_JOB, IPP_TAG_KEYWORD, "print-scaling", NULL, "fit");
+}
+
+/* Gray value at (x, y) points from the top left of page 1, drawn at 144 dpi. */
+static int pdf_gray(const char *path, double x, double y) {
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)path, (CFIndex)strlen(path), false);
+    CGPDFDocumentRef document = url ? CGPDFDocumentCreateWithURL(url) : NULL;
+    if (url) CFRelease(url);
+    CHECK(document != NULL);
+    CGPDFPageRef page = CGPDFDocumentGetPage(document, 1);
+    CGRect box = CGPDFPageGetBoxRect(page, kCGPDFMediaBox);
+    size_t width = (size_t)(box.size.width * 2), height = (size_t)(box.size.height * 2);
+    unsigned char *pixels = calloc(width * height, 1);
+    CGColorSpaceRef gray = CGColorSpaceCreateDeviceGray();
+    CGContextRef context = CGBitmapContextCreate(pixels, width, height, 8, width, gray, (CGBitmapInfo)kCGImageAlphaNone);
+    CGContextSetGrayFillColor(context, 1, 1);
+    CGContextFillRect(context, CGRectMake(0, 0, width, height));
+    CGContextScaleCTM(context, 2, 2);
+    CGContextDrawPDFPage(context, page);
+    int value = pixels[(size_t)(y * 2) * width + (size_t)(x * 2)];
+    CGContextRelease(context);
+    CGColorSpaceRelease(gray);
+    free(pixels);
+    CGPDFDocumentRelease(document);
+    return value;
+}
+
+/* print-scaling=fit puts a raster page into the printable area (12 pt margins). */
+static void test_fit_margins(void) {
+    RunningServer running;
+    P1600AirConfig config;
+    char spool[1100];
+    int port = upload_server(&running, &config, "spool-fit", spool, sizeof(spool));
+    unsigned char *page = malloc(1240U * 1748U);
+    CHECK(page != NULL);
+    memset(page, 0xff, 1240U * 1748U);
+    for (unsigned y = 0; y < 1748; y++) {
+        for (unsigned x = 0; x < 1240; x++) {
+            if (x < 6 || x >= 1234 || y < 6 || y >= 1742) page[y * 1240 + x] = 0;  /* a frame on the paper edge */
+        }
+    }
+    Bytes urf = {0};
+    urf_file_header(&urf, 1);
+    urf_page_header(&urf, 8, 0, 1240, 1748, 300);
+    urf_encode(&urf, page, 1240, 1748, 1);
+    ipp_status_t status;
+    int id = print_document(port, "image/urf", NULL, urf.data, urf.length, &status, add_fit);
+    CHECK(status == IPP_STATUS_OK && wait_job(port, id, IPP_JSTATE_COMPLETED) == IPP_JSTATE_COMPLETED);
+    char path[1200];
+    snprintf(path, sizeof(path), "%s/job-%d.pdf", spool, id);
+    /* The left edge of the frame: inside the 12 pt margin, nothing on the paper edge. */
+    int edge = pdf_gray(path, 0.5, 210), margin = pdf_gray(path, 12.6, 210);
+    if (edge < 200 || margin > 60) fprintf(stderr, "fit: gray %d at the paper edge, %d at 12.6 pt\n", edge, margin);
+    CHECK(edge >= 200 && margin <= 60);
+    server_stop(&running);
+    free(page);
+    free(urf.data);
+    puts("[PASS] IPP: print-scaling=fit scales a URF page into the printable area");
+}
+
+/* Uploads under way count against the queue limit. */
+static void test_queue_reservation(void) {
+    RunningServer running;
+    P1600AirConfig config;
+    char spool[1100];
+    snprintf(spool, sizeof(spool), "%s/%s", temp_root, "spool-queue");
+    CHECK(mkdir(spool, 0700) == 0);
+    memset(&config, 0, sizeof(config));
+    config.loopback = true;
+    config.spool_dir = spool;
+    config.queue_count = 1;
+    config.max_clients_per_host = P1600_AIR_MAX_CLIENTS;
+    config.queue_limit = 100 * 1024;
+    snprintf(config.queues[0].name, sizeof(config.queues[0].name), "TestQ");
+    snprintf(config.queues[0].make_model, sizeof(config.queues[0].make_model), "HP LaserJet Professional P1606dn");
+    server_start(&running, &config);
+    int port = p1600_air_server_port(running.server);
+    Bytes doc = {0}, message = {0};
+    padded_pdf(&doc, 80 * 1024);
+    print_job_message(port, "application/pdf", NULL, &message);
+    int fds[2];
+    for (int i = 0; i < 2; i++) {
+        Bytes head = {0};
+        post_head(&head, port, (long long)(message.length + doc.length));
+        bytes_add(&head, message.data, message.length);
+        bytes_add(&head, doc.data, 1024);
+        fds[i] = connect_raw(port);
+        int on = 1;
+        setsockopt(fds[i], SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+        raw_send_all(fds[i], head.data, head.length);
+        free(head.data);
+    }
+    usleep(300000);  /* both requests are past their busy check */
+    for (size_t sent = 1024; sent < doc.length; sent += 8192) {
+        size_t piece = doc.length - sent < 8192 ? doc.length - sent : 8192;
+        for (int i = 0; i < 2; i++) raw_send_all(fds[i], doc.data + sent, piece);
+        usleep(20000);
+    }
+    int statuses[2];
+    for (int i = 0; i < 2; i++) {
+        shutdown(fds[i], SHUT_WR);
+        statuses[i] = raw_response_status(fds[i]);
+        close(fds[i]);
+    }
+    int busy = (statuses[0] == IPP_STATUS_ERROR_BUSY) + (statuses[1] == IPP_STATUS_ERROR_BUSY);
+    int ok = (statuses[0] == IPP_STATUS_OK) + (statuses[1] == IPP_STATUS_OK);
+    if (busy != 1 || ok != 1) fprintf(stderr, "queue limit: statuses 0x%04x 0x%04x\n", statuses[0], statuses[1]);
+    CHECK(busy == 1 && ok == 1);
+    server_stop(&running);
+    free(doc.data);
+    free(message.data);
+    puts("[PASS] IPP: two uploads of 80 KiB under way against a 100 KiB queue limit: one is busy");
+}
+
 static void test_real_mode(void) {
     FakeCups fake;
     fake_start(&fake);
@@ -1788,6 +2300,14 @@ int main(int argc, char **argv) {
     test_options();
     test_bonjour();
     test_server_spool();
+    test_server_limits();
+    test_bonjour_retry();
+    test_upload_cut();
+    test_gzip_members();
+    test_deflate_split();
+    test_orientation();
+    test_fit_margins();
+    test_queue_reservation();
     test_real_mode();
     char command[1200];
     snprintf(command, sizeof(command), "/bin/rm -rf '%s'", temp_root);

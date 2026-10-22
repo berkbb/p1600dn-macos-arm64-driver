@@ -29,6 +29,13 @@
 /* One decoded page in memory: 600 dpi sRGB covers 18 x 18 in, 1200 dpi
  * sRGB covers US Legal. */
 #define P1600_RASTER_MAX_PAGE_BYTES ((size_t)768 * 1024 * 1024)
+/* A whole document. A few hundred bytes of URF describe a 744 MB page, so
+ * the pages a document decodes to are limited, not only its size: 32 GiB is
+ * about 950 gray or 320 sRGB US Letter pages at 600 dpi (more than the 256 MB
+ * an AirPrint document may have) and under a minute of conversion on an M1.
+ * Line repeats can also make a PDF far larger than the document. */
+#define P1600_RASTER_MAX_DOCUMENT_BYTES ((uint64_t)32 * 1024 * 1024 * 1024)
+#define P1600_RASTER_MAX_PDF_BYTES ((uint64_t)1024 * 1024 * 1024)
 
 typedef enum { P1600_RASTER_FORMAT_URF, P1600_RASTER_FORMAT_PWG } P1600RasterFormat;
 
@@ -69,9 +76,25 @@ typedef struct {
     uint32_t dpi_x, dpi_y;                 /* first page */
 } P1600RasterSummary;
 
+/* Limits of one conversion, checked before each page is written. */
+typedef struct {
+    uint64_t max_decoded_bytes;     /* pixels of all pages; 0: P1600_RASTER_MAX_DOCUMENT_BYTES */
+    uint64_t max_pdf_bytes;         /* 0: P1600_RASTER_MAX_PDF_BYTES */
+    bool (*stop)(void *context);    /* true stops (job canceled, server stopping); may be NULL */
+    void *context;
+    /* > 0 (print-scaling=fit): each page image is scaled down, centred, into
+     * the page less this margin in points, the printer's printable area. */
+    double fit_margin_points;
+} P1600RasterLimits;
+
+/* True when the first page of the PDF at `path` is wider than tall (its
+ * CropBox, turned by its /Rotate). */
+bool p1600_pdf_landscape(const char *path);
+
 /* Converts the raster document read from `in_fd` into a PDF written to
- * `pdf_fd`. Returns the page count, or -1 with a reason. */
-int p1600_raster_to_pdf(P1600RasterFormat format, int in_fd, int pdf_fd, P1600RasterSummary *summary, char *error,
-                     size_t error_size);
+ * `pdf_fd`; `limits` may be NULL for the defaults. Returns the page count,
+ * or -1 with a reason. */
+int p1600_raster_to_pdf(P1600RasterFormat format, int in_fd, int pdf_fd, const P1600RasterLimits *limits,
+                     P1600RasterSummary *summary, char *error, size_t error_size);
 
 #endif /* P1600_RASTER_DOC_H */

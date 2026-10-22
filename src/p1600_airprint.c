@@ -531,6 +531,8 @@ typedef struct {
     int fd;
     pthread_t thread;
     bool closing, done;         /* under the server lock */
+    time_t header_deadline;     /* under the server lock: while a request's header is read, else 0 */
+    bool cut;                   /* under the server lock: closed for a slow header */
     char peer[256];
     char uri_host[256];
     int uri_port;
@@ -565,6 +567,7 @@ struct P1600AirServer {
     pthread_t worker;
     bool worker_started;
     atomic_bool stopping;
+    size_t receiving;           /* under the lock: document bytes of uploads under way */
     DNSServiceRef dnssd;
     time_t dnssd_retry;
 };
@@ -610,14 +613,44 @@ static void free_job(P1600AirJob *job) {
 
 /* Under the lock: true when no further job (or document) fits: too many
  * active jobs, or too many document bytes waiting to be processed. */
-static bool server_busy(P1600AirServer *server, bool new_job) {
-    int active = 0;
-    size_t pending = 0;
-    for (P1600AirJob *job = server->jobs; job; job = job->next) {
-        if (job_active(job)) active++;
+static size_t queue_limit(const P1600AirServer *server) {
+    return server->config.queue_limit ? server->config.queue_limit : P1600_AIR_QUEUE_LIMIT;
+}
+
+/* Under the lock: the bytes of the documents waiting for the worker and of
+ * the uploads under way. */
+static size_t queued_bytes(const P1600AirServer *server) {
+    size_t pending = server->receiving;
+    for (const P1600AirJob *job = server->jobs; job; job = job->next) {
         if (job->document[0]) pending += job->octets;
     }
-    return (new_job && active >= P1600_AIR_MAX_ACTIVE_JOBS) || pending >= P1600_AIR_QUEUE_LIMIT;
+    return pending;
+}
+
+static bool server_busy(P1600AirServer *server, bool new_job) {
+    int active = 0;
+    for (P1600AirJob *job = server->jobs; job; job = job->next) {
+        if (job_active(job)) active++;
+    }
+    return (new_job && active >= P1600_AIR_MAX_ACTIVE_JOBS) || queued_bytes(server) >= queue_limit(server);
+}
+
+/* Counts `bytes` more of a document being received (in `*reserved`, given
+ * back when the upload ends): uploads under way count against the queue
+ * limit too, or many at once would pass it. False when it is passed; the
+ * refused upload's bytes then stop counting at once, under the same lock,
+ * so the other uploads are judged without them (not two refused at once). */
+static bool reserve_bytes(P1600AirServer *server, size_t bytes, size_t *reserved) {
+    pthread_mutex_lock(&server->lock);
+    server->receiving += bytes;
+    *reserved += bytes;
+    bool fits = queued_bytes(server) <= queue_limit(server);
+    if (!fits) {
+        server->receiving -= *reserved;
+        *reserved = 0;
+    }
+    pthread_mutex_unlock(&server->lock);
+    return fits;
 }
 
 /* Under the lock: forget the oldest finished jobs beyond the history. */
@@ -1746,8 +1779,10 @@ static bool receive_document(Request *rq, const char *compression, char *path, s
     unsigned char *input = malloc(IO_BUFFER_SIZE), *output = malloc(IO_BUFFER_SIZE);
     z_stream stream;
     memset(&stream, 0, sizeof(stream));
-    bool inflating = false, stream_end = false;
-    size_t raw = 0, total = 0;
+    /* member_end: a gzip member ended with the data so far; another may follow. */
+    bool inflating = false, stream_end = false, member_end = false;
+    /* carry: deflate bytes kept until its framing can be told (two bytes). */
+    size_t raw = 0, total = 0, carry = 0, reserved = 0;
     ipp_status_t status = IPP_STATUS_OK;
     const char *message = NULL;
     if (!input || !output) {
@@ -1755,14 +1790,25 @@ static bool receive_document(Request *rq, const char *compression, char *path, s
         message = "Out of memory.";
     }
     while (status == IPP_STATUS_OK) {
-        ssize_t count = httpRead2(client->http, (char *)input, IO_BUFFER_SIZE);
+        ssize_t count = httpRead2(client->http, (char *)input + carry, IO_BUFFER_SIZE - carry);
         if (count < 0) {
             status = IPP_STATUS_ERROR_BAD_REQUEST;
             message = "The document could not be read.";
             client->must_close = true;
             break;
         }
-        if (count == 0) break;
+        if (count == 0) {
+            /* libcups also ends the body with 0 when the client closed the
+             * connection or stalled past the timeout: the body must have
+             * arrived whole (its Content-Length, or chunked to the end). */
+            if (httpGetState(client->http) == HTTP_STATE_POST_RECV || httpError(client->http) != 0 ||
+                httpGetRemaining(client->http) > 0) {
+                status = IPP_STATUS_ERROR_BAD_REQUEST;
+                message = "The document is incomplete.";
+                client->must_close = true;
+            }
+            break;
+        }
         raw += (size_t)count;
         if (raw > P1600_AIR_DOCUMENT_LIMIT) {
             status = IPP_STATUS_ERROR_REQUEST_ENTITY;
@@ -1776,15 +1822,26 @@ static bool receive_document(Request *rq, const char *compression, char *path, s
             if (write_all(fd, input, (size_t)count) != 0) {
                 status = IPP_STATUS_ERROR_INTERNAL;
                 message = "Unable to store the document.";
+            } else if (!reserve_bytes(server, (size_t)count, &reserved)) {
+                status = IPP_STATUS_ERROR_BUSY;
+                message = "The printer is busy; try again later.";
+                client->must_close = true;
+                client->unread_body = true;
             }
             continue;
         }
         if (stream_end) continue;  /* bytes after the compressed data */
+        size_t available = carry + (size_t)count;
         if (!inflating) {
             /* deflate: zlib framing (RFC 1950) or raw deflate (RFC 1951, as libcups writes). */
             int bits = 15 + 16;
             if (coding == CODING_DEFLATE) {
-                bool zlib_header = count >= 2 && (input[0] & 0x0fU) == 8U && (input[0] >> 4) <= 7U &&
+                /* Its first two bytes tell; they may come in two reads. */
+                if (available < 2) {
+                    carry = available;
+                    continue;
+                }
+                bool zlib_header = (input[0] & 0x0fU) == 8U && (input[0] >> 4) <= 7U &&
                                    (((unsigned)input[0] << 8) | input[1]) % 31U == 0U;
                 bits = zlib_header ? 15 : -15;
             }
@@ -1794,10 +1851,19 @@ static bool receive_document(Request *rq, const char *compression, char *path, s
                 break;
             }
             inflating = true;
+            carry = 0;
         }
         stream.next_in = input;
-        stream.avail_in = (uInt)count;
+        stream.avail_in = (uInt)available;
         while (status == IPP_STATUS_OK && !stream_end && (stream.avail_in > 0 || stream.avail_out == 0)) {
+            if (member_end && stream.avail_in > 0) {
+                /* The next gzip member, or bytes after the last one (ignored). */
+                if (stream.next_in[0] != 0x1fU) {
+                    stream_end = true;
+                    break;
+                }
+                member_end = false;
+            }
             stream.next_out = output;
             stream.avail_out = IO_BUFFER_SIZE;
             int result = inflate(&stream, Z_NO_FLUSH);
@@ -1820,10 +1886,19 @@ static bool receive_document(Request *rq, const char *compression, char *path, s
                 message = "Unable to store the document.";
                 break;
             }
+            if (produced > 0 && !reserve_bytes(server, produced, &reserved)) {
+                status = IPP_STATUS_ERROR_BUSY;
+                message = "The printer is busy; try again later.";
+                client->must_close = true;
+                client->unread_body = true;
+                break;
+            }
             if (result == Z_STREAM_END) {
-                /* gzip may hold several members. */
-                if (coding == CODING_GZIP && stream.avail_in > 0) {
+                if (coding == CODING_GZIP) {
+                    /* gzip may hold several members, also in later reads
+                     * (an HTTP chunk may end where a member does). */
                     inflateReset(&stream);
+                    member_end = true;
                 } else {
                     stream_end = true;
                 }
@@ -1832,7 +1907,7 @@ static bool receive_document(Request *rq, const char *compression, char *path, s
             }
         }
     }
-    if (status == IPP_STATUS_OK && coding != CODING_NONE && !stream_end) {
+    if (status == IPP_STATUS_OK && coding != CODING_NONE && !stream_end && !member_end) {
         status = IPP_STATUS_ERROR_COMPRESSION_ERROR;
         message = "The compressed document is incomplete.";
     }
@@ -1840,6 +1915,10 @@ static bool receive_document(Request *rq, const char *compression, char *path, s
         status = IPP_STATUS_ERROR_BAD_REQUEST;
         message = "No document data.";
     }
+    /* From here the document counts as a waiting job's (or is gone). */
+    pthread_mutex_lock(&server->lock);
+    server->receiving -= reserved;
+    pthread_mutex_unlock(&server->lock);
     if (inflating) inflateEnd(&stream);
     free(input);
     free(output);
@@ -2482,6 +2561,17 @@ static bool job_canceled(P1600AirServer *server, P1600AirJob *job) {
     return canceled;
 }
 
+typedef struct {
+    P1600AirServer *server;
+    P1600AirJob *job;
+} Conversion;
+
+/* Asked between pages: Cancel-Job and the shutdown stop a conversion. */
+static bool conversion_stopped(void *context) {
+    Conversion *conversion = context;
+    return atomic_load(&conversion->server->stopping) || job_canceled(conversion->server, conversion->job);
+}
+
 /* Converts (URF, PWG raster) and submits (CUPS or the spool directory) a
  * job; the job is pinned by the worker. */
 static void process_job(P1600AirServer *server, P1600AirJob *job) {
@@ -2517,11 +2607,26 @@ static void process_job(P1600AirServer *server, P1600AirJob *job) {
         if (pdf_fd < 0 || in_fd < 0) {
             snprintf(error, sizeof(error), "Unable to convert the document.");
         } else {
+            Conversion conversion = {server, job};
+            P1600RasterLimits limits = {.max_decoded_bytes = server->config.max_raster_bytes,
+                                     .stop = conversion_stopped,
+                                     .context = &conversion};
+            /* print-scaling=fit: into the printable area (cgpdftoraster's
+             * fit-to-page leaves a page the size of the paper as it is). */
+            ipp_attribute_t *scaling = ippFindAttribute(attrs, "print-scaling", IPP_TAG_KEYWORD);
+            const char *scaling_value = scaling ? ippGetString(scaling, 0, NULL) : NULL;
+            if (scaling_value && strcmp(scaling_value, "fit") == 0) {
+                limits.fit_margin_points = P1600_AIR_MARGIN * 72.0 / 2540.0;
+            }
             pages = p1600_raster_to_pdf(strcmp(format, "image/urf") == 0 ? P1600_RASTER_FORMAT_URF : P1600_RASTER_FORMAT_PWG,
-                                     in_fd, pdf_fd, &summary, error, sizeof(error));
+                                     in_fd, pdf_fd, &limits, &summary, error, sizeof(error));
         }
         if (in_fd >= 0) close(in_fd);
         if (pdf_fd >= 0) close(pdf_fd);
+        if (pages < 0 && job_canceled(server, job)) {
+            VERBOSE("job %d: canceled while it was converted", id);
+            goto cleanup;
+        }
         if (pages < 0) {
             p1600_air_log("job %d: %s", id, error);
             finish_job(server, job, IPP_JSTATE_ABORTED, "document-format-error", error);
@@ -2540,6 +2645,15 @@ static void process_job(P1600AirServer *server, P1600AirJob *job) {
     /* A raster page is already the size of the paper the client chose. */
     if (raster_media && !cupsGetOption("PageSize", num_options, options)) {
         num_options = cupsAddOption("PageSize", raster_media->ppd, num_options, &options);
+    }
+    /* cgpdftoraster turns a page that is taller than wide by 90 degrees,
+     * unscaled, for orientation-requested 4 and 5: its top and bottom fall
+     * off the sheet. Raster pages come laid out by the client already. */
+    const char *orientation = cupsGetOption("orientation-requested", num_options, options);
+    if (orientation && (raster || (strcmp(submit_format, "application/pdf") == 0 &&
+                                   (strcmp(orientation, "4") == 0 || strcmp(orientation, "5") == 0) &&
+                                   !p1600_pdf_landscape(submit_path)))) {
+        num_options = cupsRemoveOption("orientation-requested", num_options, &options);
     }
     if (job_canceled(server, job)) goto cleanup;
 
@@ -2882,6 +2996,10 @@ static bool process_http(Client *client) {
     char uri[1024] = "";
     http_state_t state;
     int waits = 0;
+    int header_seconds = server->config.header_seconds > 0 ? server->config.header_seconds : P1600_AIR_HEADER_SECONDS;
+    pthread_mutex_lock(&server->lock);
+    client->header_deadline = time(NULL) + header_seconds;
+    pthread_mutex_unlock(&server->lock);
     while ((state = httpReadRequest(http, uri, sizeof(uri))) == HTTP_STATE_WAITING) {
         if (++waits > P1600_AIR_IDLE_SECONDS * 100 || atomic_load(&server->stopping)) return false;
         usleep(10000);
@@ -2901,6 +3019,9 @@ static bool process_http(Client *client) {
     http_status_t status;
     while ((status = httpUpdate(http)) == HTTP_STATUS_CONTINUE) {
     }
+    pthread_mutex_lock(&server->lock);
+    client->header_deadline = 0;
+    pthread_mutex_unlock(&server->lock);
     if (status != HTTP_STATUS_OK) {
         client->must_close = true;
         send_response(client, HTTP_STATUS_BAD_REQUEST, NULL, NULL, 0);
@@ -3073,6 +3194,21 @@ static void *client_main(void *argument) {
     return NULL;
 }
 
+/* Under the lock: closes connections whose request header is late. Their
+ * thread then sees the socket end and finishes. */
+static void cut_slow_clients(P1600AirServer *server) {
+    time_t now = time(NULL);
+    for (int i = 0; i < P1600_AIR_MAX_CLIENTS; i++) {
+        Client *client = server->clients[i];
+        if (!client || client->closing || client->cut || !client->header_deadline || now < client->header_deadline) {
+            continue;
+        }
+        client->cut = true;
+        p1600_air_log("closing a connection from %s: its request header took too long", client->peer);
+        shutdown(client->fd, SHUT_RDWR);
+    }
+}
+
 /* Under the lock: joins finished connection threads. */
 static void reap_clients(P1600AirServer *server, bool all) {
     for (int i = 0; i < P1600_AIR_MAX_CLIENTS; i++) {
@@ -3108,18 +3244,27 @@ static void accept_client(P1600AirServer *server, int listener) {
     client->http = http;
     client->fd = fd;
     httpGetHostname(http, client->peer, (int)sizeof(client->peer));
+    int per_host = server->config.max_clients_per_host > 0 ? server->config.max_clients_per_host
+                                                            : P1600_AIR_MAX_CLIENTS_PER_HOST;
     pthread_mutex_lock(&server->lock);
     reap_clients(server, false);
-    int slot = -1;
-    for (int i = 0; i < P1600_AIR_MAX_CLIENTS && slot < 0; i++) {
-        if (!server->clients[i]) slot = i;
+    int slot = -1, from_host = 0;
+    for (int i = 0; i < P1600_AIR_MAX_CLIENTS; i++) {
+        if (!server->clients[i]) {
+            if (slot < 0) slot = i;
+        } else if (strcmp(server->clients[i]->peer, client->peer) == 0) {
+            from_host++;
+        }
     }
-    bool started = slot >= 0 && pthread_create(&client->thread, NULL, client_main, client) == 0;
+    bool host_full = from_host >= per_host;
+    bool started = slot >= 0 && !host_full && pthread_create(&client->thread, NULL, client_main, client) == 0;
     if (started) server->clients[slot] = client;
     pthread_mutex_unlock(&server->lock);
     if (!started) {
         p1600_air_log("refusing a connection from %s: %s", client->peer,
-                   slot < 0 ? "too many connections" : "no thread");
+                   host_full  ? "too many connections from this address"
+                   : slot < 0 ? "too many connections"
+                              : "no thread");
         httpClose(http);
         free(client);
         return;
@@ -3452,7 +3597,11 @@ int p1600_air_server_run(P1600AirServer *server, int stop_fd) {
         p1600_air_log("serving %s (%s) at %s, %s", server->printers[i].name, server->printers[i].make_model,
                    server->printers[i].resource, server->spool_dir[0] ? "spool directory" : "CUPS");
     }
-    if (server->config.dnssd) dnssd_start(server);
+    int retry_seconds = server->config.dnssd_retry_seconds > 0 ? server->config.dnssd_retry_seconds
+                                                               : P1600_AIR_DNSSD_RETRY_SECONDS;
+    /* Bonjour not there yet (mDNSResponder starting or restarting): try
+     * again, as after a lost connection, instead of serving unseen. */
+    if (server->config.dnssd && dnssd_start(server) != 0) server->dnssd_retry = time(NULL) + retry_seconds;
     while (!atomic_load(&server->stopping)) {
         struct pollfd channels[4];
         int count = 0;
@@ -3480,16 +3629,17 @@ int p1600_air_server_run(P1600AirServer *server, int stop_fd) {
         if (dnssd_index >= 0 && channels[dnssd_index].revents) {
             DNSServiceErrorType error = DNSServiceProcessResult(server->dnssd);
             if (error != kDNSServiceErr_NoError) {
-                p1600_air_log("Bonjour connection lost (%d); registering again in 10 seconds", (int)error);
+                p1600_air_log("Bonjour connection lost (%d); registering again in %d seconds", (int)error, retry_seconds);
                 dnssd_stop(server);
-                server->dnssd_retry = time(NULL) + 10;
+                server->dnssd_retry = time(NULL) + retry_seconds;
             }
         }
         if (server->config.dnssd && !server->dnssd && server->dnssd_retry && time(NULL) >= server->dnssd_retry) {
             server->dnssd_retry = 0;
-            if (dnssd_start(server) != 0) server->dnssd_retry = time(NULL) + 30;
+            if (dnssd_start(server) != 0) server->dnssd_retry = time(NULL) + 3 * retry_seconds;  /* 30 s */
         }
         pthread_mutex_lock(&server->lock);
+        cut_slow_clients(server);
         reap_clients(server, false);
         pthread_mutex_unlock(&server->lock);
     }

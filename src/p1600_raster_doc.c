@@ -405,7 +405,9 @@ struct P1600PdfWriter {
     CGContextRef context;
     int fd;
     int pages;
+    uint64_t written;
     bool write_failed;
+    double margin;  /* print-scaling=fit: images go into the page less this margin */
 };
 
 static size_t pdf_put(void *info, const void *buffer, size_t count) {
@@ -421,6 +423,7 @@ static size_t pdf_put(void *info, const void *buffer, size_t count) {
         }
         bytes += written;
         left -= (size_t)written;
+        writer->written += (uint64_t)written;
     }
     return writer->write_failed ? 0 : count;
 }
@@ -502,8 +505,20 @@ int p1600_pdf_writer_add_page(P1600PdfWriter *writer, P1600RasterPage *page, cha
         CGImageRelease(image);
         return fail(error, error_size, "Out of memory");
     }
+    /* print-scaling=fit: the page image, scaled down and centred, inside
+     * the printable area; the page keeps the paper's size. */
+    CGRect draw = box;
+    if (writer->margin > 0 && box.size.width > 2 * writer->margin && box.size.height > 2 * writer->margin) {
+        CGFloat scale_x = (box.size.width - 2 * writer->margin) / box.size.width;
+        CGFloat scale_y = (box.size.height - 2 * writer->margin) / box.size.height;
+        CGFloat scale = scale_x < scale_y ? scale_x : scale_y;
+        draw.size.width = box.size.width * scale;
+        draw.size.height = box.size.height * scale;
+        draw.origin.x = (box.size.width - draw.size.width) / 2;
+        draw.origin.y = (box.size.height - draw.size.height) / 2;
+    }
     CGPDFContextBeginPage(writer->context, page_info);
-    CGContextDrawImage(writer->context, box, image);
+    CGContextDrawImage(writer->context, draw, image);
     CGPDFContextEndPage(writer->context);
     CGImageRelease(image);
     CFRelease(page_info);
@@ -527,6 +542,23 @@ int p1600_pdf_writer_close(P1600PdfWriter *writer, char *error, size_t error_siz
     return status;
 }
 
+bool p1600_pdf_landscape(const char *path) {
+    CFURLRef url =
+        path ? CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)path, (CFIndex)strlen(path), false) : NULL;
+    CGPDFDocumentRef document = url ? CGPDFDocumentCreateWithURL(url) : NULL;
+    if (url) CFRelease(url);
+    if (!document) return false;
+    bool landscape = false;
+    CGPDFPageRef page = CGPDFDocumentGetNumberOfPages(document) > 0 ? CGPDFDocumentGetPage(document, 1) : NULL;
+    if (page) {
+        CGRect box = CGPDFPageGetBoxRect(page, kCGPDFCropBox);
+        bool turned = (CGPDFPageGetRotationAngle(page) / 90) % 2 != 0;
+        landscape = turned ? box.size.height > box.size.width : box.size.width > box.size.height;
+    }
+    CGPDFDocumentRelease(document);
+    return landscape;
+}
+
 /* --- raster document to PDF ---------------------------------------------------- */
 
 static ssize_t fd_read(void *context, void *buffer, size_t length) {
@@ -541,10 +573,20 @@ static ssize_t fd_read(void *context, void *buffer, size_t length) {
 typedef struct {
     P1600PdfWriter *writer;
     P1600RasterSummary *summary;
+    P1600RasterLimits limits;
+    uint64_t decoded;
 } PdfSink;
 
 static int pdf_sink(void *context, P1600RasterPage *page, char *error, size_t error_size) {
     PdfSink *sink = context;
+    if (sink->limits.stop && sink->limits.stop(sink->limits.context)) {
+        return fail(error, error_size, "The conversion was stopped");
+    }
+    sink->decoded += (uint64_t)page->width * page->components * page->height;
+    if (sink->decoded > sink->limits.max_decoded_bytes) {
+        return fail(error, error_size, "The document is too large: its pages need more than %llu MB",
+                    (unsigned long long)(sink->limits.max_decoded_bytes / (1024U * 1024U)));
+    }
     if (sink->summary->pages == 0) {
         sink->summary->width_points = (double)page->width * 72.0 / page->dpi_x;
         sink->summary->height_points = (double)page->height * 72.0 / page->dpi_y;
@@ -552,17 +594,26 @@ static int pdf_sink(void *context, P1600RasterPage *page, char *error, size_t er
         sink->summary->dpi_y = page->dpi_y;
     }
     sink->summary->pages++;
-    return p1600_pdf_writer_add_page(sink->writer, page, error, error_size);
+    if (p1600_pdf_writer_add_page(sink->writer, page, error, error_size) != 0) return -1;
+    if (sink->writer->written > sink->limits.max_pdf_bytes) {
+        return fail(error, error_size, "The document is too large: its PDF is larger than %llu MB",
+                    (unsigned long long)(sink->limits.max_pdf_bytes / (1024U * 1024U)));
+    }
+    return 0;
 }
 
-int p1600_raster_to_pdf(P1600RasterFormat format, int in_fd, int pdf_fd, P1600RasterSummary *summary, char *error,
-                     size_t error_size) {
+int p1600_raster_to_pdf(P1600RasterFormat format, int in_fd, int pdf_fd, const P1600RasterLimits *limits,
+                     P1600RasterSummary *summary, char *error, size_t error_size) {
     P1600RasterSummary local;
     if (!summary) summary = &local;
     memset(summary, 0, sizeof(*summary));
     P1600PdfWriter *writer = p1600_pdf_writer_open(pdf_fd, error, error_size);
     if (!writer) return -1;
-    PdfSink sink = {writer, summary};
+    PdfSink sink = {.writer = writer, .summary = summary};
+    if (limits) sink.limits = *limits;
+    writer->margin = sink.limits.fit_margin_points;
+    if (!sink.limits.max_decoded_bytes) sink.limits.max_decoded_bytes = P1600_RASTER_MAX_DOCUMENT_BYTES;
+    if (!sink.limits.max_pdf_bytes) sink.limits.max_pdf_bytes = P1600_RASTER_MAX_PDF_BYTES;
     int pages = format == P1600_RASTER_FORMAT_URF ? p1600_urf_decode(fd_read, &in_fd, pdf_sink, &sink, error, error_size)
                                                : p1600_pwg_decode(fd_read, &in_fd, pdf_sink, &sink, error, error_size);
     char close_error[200];
