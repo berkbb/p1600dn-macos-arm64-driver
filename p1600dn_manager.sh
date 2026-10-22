@@ -19,17 +19,20 @@ PPD_INSTALL_DIR="/Library/Printers/PPDs/Contents/Resources"
 PPD_FILE="$DRIVER_DIR/ppd/P1600dn-Series.ppd"
 INSTALLED_PPD="$PPD_INSTALL_DIR/P1600dn-Series.ppd"
 # Driver 5.0 and earlier installed under these names; installing moves their
-# queues to this driver and removes them (retire_legacy_driver).
-LEGACY_INSTALL_DIR="/Library/Printers/hp_p1606dn"
+# queues to this driver and removes them (retire_legacy_driver). The folder
+# lies next to INSTALL_DIR, so tests that move INSTALL_DIR move it too.
+LEGACY_INSTALL_DIR="${INSTALL_DIR%/*}/hp_p1606dn"
 LEGACY_FILTER_NAME="rastertohpp1606dn"
 LEGACY_PPD="$PPD_INSTALL_DIR/HP-LaserJet-P1606dn-ARM.ppd"
 LEGACY_NOTIFIER_LABEL="com.berkbb.hpp1606dn.notifier"
 LEGACY_AIRPRINT_LABEL="com.berkbb.hpp1606dn.airprint"
-# Files of the OpenPrinting foo2zjs fallback that driver 3.1-3.2 could install.
-# It encoded pages itself, past the page guard, so it was removed; these
-# paths are only cleaned up (retire_openprinting_fallback).
+# Files of the OpenPrinting foo2zjs fallback that driver 3.1-3.2 could install
+# in LEGACY_INSTALL_DIR and PPD_INSTALL_DIR. It encoded pages itself, past the
+# page guard, so it was removed; these files are only cleaned up
+# (retire_openprinting_fallback).
 OPENPRINTING_FILTER="$LEGACY_INSTALL_DIR/rastertohpp1606dn-openprinting"
 OPENPRINTING_ENCODER="$LEGACY_INSTALL_DIR/foo2zjs-openprinting"
+OPENPRINTING_LICENSE="$LEGACY_INSTALL_DIR/OpenPrinting-foo2zjs-COPYING"
 OPENPRINTING_INSTALLED_PPD="$PPD_INSTALL_DIR/HP-LaserJet-P1606dn-OpenPrinting.ppd"
 CUPS_PPD_DIR="/etc/cups/ppd"
 # Apple Silicon Macs run macOS 11 Big Sur or later; every binary targets it.
@@ -44,9 +47,15 @@ AIRPRINT_LABEL="com.berkbb.p1600dn.airprint"
 LAUNCH_AGENTS_DIR="/Library/LaunchAgents"
 LAUNCH_DAEMONS_DIR="/Library/LaunchDaemons"
 LAUNCHCTL="/bin/launchctl"
+# The apps are copied as root, which Launch Services does not notice: until
+# they are registered, Finder shows them crossed out, Printers & Scanners
+# cannot open the utility, and the notifier aborts in
+# UNUserNotificationCenter. Tests replace it.
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 # Gutenprint has no P1600dn driver, and this driver replaces it: the first
-# install and every uninstall remove it without asking (purge_gutenprint).
-# Tests move its paths under GUTENPRINT_ROOT and replace pkgutil.
+# install offers to remove it, and every uninstall removes it once the
+# uninstall is confirmed (purge_gutenprint). Tests move its paths under
+# GUTENPRINT_ROOT and replace pkgutil.
 GUTENPRINT_ROOT=""
 PKGUTIL="/usr/sbin/pkgutil"
 
@@ -158,8 +167,10 @@ execute_privileged_action() {
     esac
 }
 
+# Asks a yes/no question; ASSUME_YES (--yes) answers yes. The second argument
+# replaces the message shown for "no".
 confirm_action() {
-    local prompt="$1"
+    local prompt="$1" declined="${2:-[i] İşlem iptal edildi / Operation cancelled.}"
     local answer
 
     if [ "${ASSUME_YES:-0}" -eq 1 ]; then
@@ -171,7 +182,7 @@ confirm_action() {
     fi
     case "$answer" in
         e|E|evet|Evet|EVET|y|Y|yes|Yes|YES) return 0 ;;
-        *) print_color "$YELLOW" "[i] İşlem iptal edildi / Operation cancelled."; return 1 ;;
+        *) print_color "$YELLOW" "$declined"; return 1 ;;
     esac
 }
 
@@ -240,7 +251,7 @@ test_p1606dn_ppd() (
     grep -Fqx '*cupsFilter: "application/vnd.cups-raster 0 /Library/Printers/p1600dn/rastertop1600dn"' "$ppd" || fail "Wrong raster filter path"
     # Command filter: ReportLevels command jobs report the toner level.
     grep -Fqx '*cupsFilter: "application/vnd.cups-command 100 /Library/Printers/p1600dn/commandtop1600dn"' "$ppd" || fail "Wrong command filter path"
-    grep -Fqx '*cupsCommands: "ReportLevels PrintSelfTestPage Clean"' "$ppd" || fail "Printer commands are not declared"
+    grep -Fqx '*cupsCommands: "PrintSelfTestPage Clean"' "$ppd" || fail "Printer commands are not declared"
     grep -Fqx "*APPrinterUtilityPath: \"/Library/Printers/p1600dn/$UTILITY_APP_NAME\"" "$ppd" || fail "Printer utility path is missing"
     for keyword in PrinterReady CoverOpen TonerMissing ManualDuplex ManualFeed OutOfPaper OutputJam InputJam EngineFuser EngineScanner EngineComm Printingpage Complete; do
         grep -q "^\*cupsIPPReason $keyword/" "$ppd" || fail "Status text $keyword is missing"
@@ -390,24 +401,54 @@ console_user_id() {
     stat -f %u /dev/console 2>/dev/null || echo 0
 }
 
-# (Re)starts a LaunchAgent in the logged-in user's session; other users get
-# it at their next login (RunAtLoad).
+# Every user with a GUI session: the console user and the users behind fast
+# user switching (each session runs its own loginwindow as that user).
+gui_user_ids() {
+    { console_user_id; ps -axo uid=,comm= 2>/dev/null | awk '$2 ~ /\/loginwindow$/ { print $1 }'; } |
+        awk '$1 != 0 && !seen[$1]++ { print $1 }'
+}
+
+# (Re)starts a LaunchAgent in every GUI session, so an update also replaces
+# the agent of a user behind fast user switching; users who log in later get
+# it at login (RunAtLoad).
 start_launch_agent() {
     local label="$1" uid
-    uid=$(console_user_id)
-    [ "$uid" != "0" ] || return 0
-    "$LAUNCHCTL" bootout "gui/$uid/$label" >/dev/null 2>&1 || true
-    if ! "$LAUNCHCTL" bootstrap "gui/$uid" "$LAUNCH_AGENTS_DIR/$label.plist"; then
-        echo "[i] $label bir sonraki oturum açılışında başlayacak / will start at the next login." >&2
-    fi
+    for uid in $(gui_user_ids); do
+        "$LAUNCHCTL" bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+        if ! "$LAUNCHCTL" bootstrap "gui/$uid" "$LAUNCH_AGENTS_DIR/$label.plist"; then
+            echo "[i] $label bir sonraki oturum açılışında başlayacak / will start at the next login." >&2
+        fi
+    done
     return 0
 }
 
 stop_launch_agent() {
     local label="$1" uid
-    uid=$(console_user_id)
-    [ "$uid" != "0" ] || return 0
-    "$LAUNCHCTL" bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+    for uid in $(gui_user_ids); do
+        "$LAUNCHCTL" bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+    done
+}
+
+# Makes an installed app readable by every user: directories and the
+# executable 755, other files 644. A bundle whose Info.plist only root can read
+# shows a no-entry icon, cannot be opened, and makes the notifier abort in
+# UNUserNotificationCenter. Modes are not part of the signature.
+set_app_modes() {
+    local app="$1"
+    find "$app" -type d -exec chmod 755 {} + || return 1
+    find "$app" -type f -exec chmod 644 {} + || return 1
+    chmod 755 "$app/Contents/MacOS/"* || return 1
+}
+
+# Registers (-f) or unregisters (-u) an app with Launch Services, in the
+# system's database and in that of every user with a GUI session (it is per
+# user).
+register_app() {
+    local action="$1" app="$2" uid
+    "$LSREGISTER" "$action" "$app" >/dev/null 2>&1 || true
+    for uid in $(gui_user_ids); do
+        "$LAUNCHCTL" asuser "$uid" /usr/bin/sudo -u "#$uid" "$LSREGISTER" "$action" "$app" >/dev/null 2>&1 || true
+    done
 }
 
 install_launch_agent() {
@@ -452,14 +493,17 @@ enable_airprint() {
     print_color "$GREEN" "[+] AirPrint açık / AirPrint enabled (TCP 8632)."
     echo "[i] iPhone/iPad: Paylaş → Yazdır → \"<yazıcı> @ $(scutil --get ComputerName 2>/dev/null || hostname)\""
     echo "[i] iPhone/iPad: Share → Print → \"<printer> @ $(scutil --get ComputerName 2>/dev/null || hostname)\""
-    # macOS Printer Sharing would announce the same queue under the same name.
-    while IFS= read -r queue; do
-        [ -n "$queue" ] || continue
-        if lpoptions -p "$queue" 2>/dev/null | grep -q 'printer-is-shared=true'; then
-            print_color "$YELLOW" "[!] $queue macOS Yazıcı Paylaşımı ile de paylaşılıyor; iPhone'da iki kez görünür. Paylaşımı kapatın: lpadmin -p $queue -o printer-is-shared=false"
-            print_color "$YELLOW" "[!] $queue is also shared by macOS Printer Sharing and appears twice on iPhone. Turn that off: lpadmin -p $queue -o printer-is-shared=false"
-        fi
-    done < <(p1600dn_queue_names)
+    # macOS Printer Sharing (cupsctl _share_printers=1) would announce a shared
+    # queue under the same name; while it is off, cupsd announces nothing.
+    if cupsctl 2>/dev/null | grep -qx '_share_printers=1'; then
+        while IFS= read -r queue; do
+            [ -n "$queue" ] || continue
+            if lpoptions -p "$queue" 2>/dev/null | grep -q 'printer-is-shared=true'; then
+                print_color "$YELLOW" "[!] $queue macOS Yazıcı Paylaşımı ile de paylaşılıyor; iPhone'da iki kez görünür. Paylaşımı kapatın: lpadmin -p $queue -o printer-is-shared=false"
+                print_color "$YELLOW" "[!] $queue is also shared by macOS Printer Sharing and appears twice on iPhone. Turn that off: lpadmin -p $queue -o printer-is-shared=false"
+            fi
+        done < <(p1600dn_queue_names)
+    fi
     echo "[i] Güvenlik duvarı açıksa gelen bağlantılara izin verin / If the firewall is on, allow incoming connections for p1600dn-airprint."
 }
 
@@ -493,24 +537,36 @@ airprint_menu() {
     fi
 }
 
+# The signed binaries are replaced, never written over in place: macOS kills
+# a running process whose signed file changes (and the next one started from
+# it). A new file leaves running filters and the AirPrint server the old one.
+replace_binary() {
+    rm -f "$2" || return 1
+    cp "$1" "$2"
+}
+
 install_shared_tools() {
     local build="$1"
-    cp "$build/commandtop1600dn" "$INSTALL_DIR/commandtop1600dn" || return 1
-    cp "$build/p1600dn-utility" "$INSTALL_DIR/p1600dn-utility" || return 1
+    replace_binary "$build/commandtop1600dn" "$INSTALL_DIR/commandtop1600dn" || return 1
+    replace_binary "$build/p1600dn-utility" "$INSTALL_DIR/p1600dn-utility" || return 1
     rm -rf "${INSTALL_DIR:?}/$UTILITY_APP_NAME" || return 1
     /usr/bin/ditto "$build/$UTILITY_APP_NAME" "$INSTALL_DIR/$UTILITY_APP_NAME" || return 1
     chmod 755 "$INSTALL_DIR/commandtop1600dn" "$INSTALL_DIR/p1600dn-utility" || return 1
     chown -R root:wheel "$INSTALL_DIR/commandtop1600dn" "$INSTALL_DIR/p1600dn-utility" \
           "$INSTALL_DIR/$UTILITY_APP_NAME" || return 1
+    set_app_modes "$INSTALL_DIR/$UTILITY_APP_NAME" || return 1
+    register_app -f "$INSTALL_DIR/$UTILITY_APP_NAME"
     # Printer notifications: the agent is replaced while stopped.
     stop_launch_agent "$NOTIFIER_LABEL"
     rm -rf "${INSTALL_DIR:?}/$NOTIFIER_APP_NAME" || return 1
     /usr/bin/ditto "$build/$NOTIFIER_APP_NAME" "$INSTALL_DIR/$NOTIFIER_APP_NAME" || return 1
     chown -R root:wheel "$INSTALL_DIR/$NOTIFIER_APP_NAME" || return 1
+    set_app_modes "$INSTALL_DIR/$NOTIFIER_APP_NAME" || return 1
+    register_app -f "$INSTALL_DIR/$NOTIFIER_APP_NAME"
     install_launch_agent "$DRIVER_DIR/notifier/$NOTIFIER_LABEL.plist" "$NOTIFIER_LABEL" || return 1
     start_launch_agent "$NOTIFIER_LABEL"
     # AirPrint server (started only when AirPrint is turned on) and its icon.
-    cp "$build/p1600dn-airprint" "$INSTALL_DIR/p1600dn-airprint" || return 1
+    replace_binary "$build/p1600dn-airprint" "$INSTALL_DIR/p1600dn-airprint" || return 1
     cp "$DRIVER_DIR/assets/P1600dnPrinter.png" "$INSTALL_DIR/P1600dnPrinter.png" || return 1
     chmod 755 "$INSTALL_DIR/p1600dn-airprint" || return 1
     chmod 644 "$INSTALL_DIR/P1600dnPrinter.png" || return 1
@@ -525,11 +581,35 @@ remove_shared_tools() {
     rm -f "$LAUNCH_DAEMONS_DIR/$AIRPRINT_LABEL.plist" "$INSTALL_DIR/p1600dn-airprint" "$INSTALL_DIR/P1600dnPrinter.png"
     remove_launch_agent "$NOTIFIER_LABEL"
     rm -f "$INSTALL_DIR/commandtop1600dn" "$INSTALL_DIR/p1600dn-utility" || return 1
+    register_app -u "$INSTALL_DIR/$UTILITY_APP_NAME"
+    register_app -u "$INSTALL_DIR/$NOTIFIER_APP_NAME"
     rm -rf "${INSTALL_DIR:?}/$UTILITY_APP_NAME" "${INSTALL_DIR:?}/$NOTIFIER_APP_NAME"
 }
 
+# install_driver runs make as root. build/ goes back to the user who ran sudo
+# whether the install succeeds or stops halfway, so make, --test and --status
+# keep working without sudo.
+restore_build_ownership() {
+    local sudo_group
+    [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && [ -d build ] || return 0
+    sudo_group=$(id -g "$SUDO_USER" 2>/dev/null || true)
+    if [ -n "$sudo_group" ]; then
+        chown -R "${SUDO_USER}:${sudo_group}" build 2>/dev/null || true
+    else
+        chown -R "$SUDO_USER" build 2>/dev/null || true
+    fi
+}
+
 install_driver() {
-    local sudo_group first_install=0
+    local status
+    install_driver_steps
+    status=$?
+    restore_build_ownership
+    return "$status"
+}
+
+install_driver_steps() {
+    local first_install=0 remove_gutenprint=0
     require_root "--install" || return 1
     [ -e "$INSTALL_DIR/rastertop1600dn" ] || [ -e "$INSTALLED_PPD" ] ||
         [ -e "$LEGACY_INSTALL_DIR/$LEGACY_FILTER_NAME" ] || [ -e "$LEGACY_PPD" ] || first_install=1
@@ -537,6 +617,14 @@ install_driver() {
     echo " HP LaserJet Professional P1600dn Series - macOS ARM Kurucu"
     echo " (Desteklenenler / Supported: P1606dn, P1607dn, P1608dn, P1609dn)"
     echo "=========================================================="
+    # Asked before the build: Gutenprint has no P1600dn driver. A reinstall or
+    # update leaves it alone.
+    if [ "$first_install" -eq 1 ] && gutenprint_found; then
+        if confirm_action "Gutenprint kurulu; P1600dn için gerekmiyor. Kaldırılsın mı? / Gutenprint is installed and not needed for the P1600dn. Remove it?" \
+                          "[i] Gutenprint bırakılıyor / Gutenprint is kept."; then
+            remove_gutenprint=1
+        fi
+    fi
     echo "[1/4] Derleme ve tüm otomatik testler çalıştırılıyor / Building & running tests..."
     make clean || return 1
     make test || return 1
@@ -549,8 +637,11 @@ install_driver() {
 
     echo "[2/4] Sürücü, toner filtresi, yazıcı yardımcı programı, durum aracı ve simge yükleniyor / Installing driver, toner filter, printer utility, status tool, and icon..."
     mkdir -p "$INSTALL_DIR" || return 1
-    cp build/rastertop1600dn "$INSTALL_DIR/rastertop1600dn" || return 1
-    cp build/p1600dn-status "$INSTALL_DIR/p1600dn-status" || return 1
+    # cupsd's filters (_lp), the notifier, the utility and AirPrint (nobody)
+    # all read this folder, whatever umask sudo ran with.
+    chmod 755 "$INSTALL_DIR" || return 1
+    replace_binary build/rastertop1600dn "$INSTALL_DIR/rastertop1600dn" || return 1
+    replace_binary build/p1600dn-status "$INSTALL_DIR/p1600dn-status" || return 1
     install_shared_tools build || return 1
     cp assets/P1600dnPrinter.icns "$INSTALL_DIR/P1600dnPrinter.icns" || return 1
     chmod 755 "$INSTALL_DIR/rastertop1600dn" "$INSTALL_DIR/p1600dn-status" || return 1
@@ -566,19 +657,11 @@ install_driver() {
 
     retire_openprinting_fallback
     retire_legacy_driver
-    if [ "$first_install" -eq 1 ]; then
+    if [ "$remove_gutenprint" -eq 1 ]; then
         purge_gutenprint || print_color "$YELLOW" "[!] Gutenprint tamamen kaldırılamadı / Gutenprint could not be removed completely."
     fi
     echo "[4/4] CUPS servisi güncelleniyor / Restarting CUPS daemon..."
     killall -HUP cupsd 2>/dev/null || true
-    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-        sudo_group=$(id -g "$SUDO_USER" 2>/dev/null || true)
-        if [ -n "$sudo_group" ]; then
-            chown -R "${SUDO_USER}:${sudo_group}" build 2>/dev/null || true
-        else
-            chown -R "$SUDO_USER" build 2>/dev/null || true
-        fi
-    fi
     echo ""
     print_color "$GREEN" "[+] Sürücü dosyaları başarıyla kuruldu / Driver files installed successfully."
     echo "[i] Sonraki adım: Menüden [6] yeni kuyruk ekle, [8] mevcut kuyruğu P1600dn serisine geçir."
@@ -598,7 +681,7 @@ retire_openprinting_fallback() {
             echo "[i] '$queue' OpenPrinting yedeğinden ana sürücüye geçirildi / moved from the OpenPrinting fallback to the native driver."
         fi
     done
-    rm -f "$OPENPRINTING_FILTER" "$OPENPRINTING_ENCODER" "$OPENPRINTING_INSTALLED_PPD"
+    rm -f "$OPENPRINTING_FILTER" "$OPENPRINTING_ENCODER" "$OPENPRINTING_LICENSE" "$OPENPRINTING_INSTALLED_PPD"
 }
 
 # Driver 5.0 and earlier used other names (LEGACY_*). Its queues move to this
@@ -637,8 +720,9 @@ uninstall_driver() {
     retire_legacy_driver files
     rmdir "$INSTALL_DIR" 2>/dev/null || true
     rm -f "$INSTALLED_PPD" || return 1
-    # Eski arm64 modül kalıntılarını da temizle
-    rm -rf "/Library/Printers/hp1010dn" 2>/dev/null || true
+    # Eski arm64 modül kalıntılarını da temizle (INSTALL_DIR'in yanında).
+    # / Older arm64 module residue, next to INSTALL_DIR.
+    rm -rf "${INSTALL_DIR%/*}/hp1010dn" 2>/dev/null || true
     rm -f "$PPD_INSTALL_DIR"/HP-LaserJet-10*.ppd 2>/dev/null || true
     purge_gutenprint || print_color "$YELLOW" "[!] Gutenprint tamamen kaldırılamadı / Gutenprint could not be removed completely."
     killall -HUP cupsd 2>/dev/null || true
@@ -647,19 +731,41 @@ uninstall_driver() {
     echo "[i] Existing CUPS queues were not deleted automatically. Remove them from System Settings if needed."
 }
 
-# Gutenprint has no P1600dn driver: at best a network queue printed PCL
-# through another model (HP LaserJet 1160), without the printer's duplex,
-# paper codes, status or the page guard. The first install and every
-# uninstall remove it without asking. P1600dn queues that still use it move to
-# the native PPD first. While another printer prints through Gutenprint, it
-# stays, so that printer keeps working.
-purge_gutenprint() {
-    local ppd queue device pkg path found=0 failed=0 users=()
+# Gutenprint's package receipts known to pkgutil.
+gutenprint_packages() {
+    "$PKGUTIL" --pkgs 2>/dev/null | grep -Ei 'gutenprint|gimp-print' || true
+}
+
+# Gutenprint's files that exist: driver, tools, CUPS filter, PPDs, receipts.
+gutenprint_files() {
+    local path
     local paths=(
         /Library/Printers/gutenprint /Library/Printers/Gutenprint /Library/Printers/Gutenprint.printerDriver
         /Library/PreferencePanes/Gutenprint.prefPane /usr/local/share/gutenprint /usr/local/lib/gutenprint
         /usr/local/include/gutenprint /usr/local/bin/escputil /usr/local/bin/cups-calibrate
     )
+    for path in "${paths[@]/#/$GUTENPRINT_ROOT}" "$GUTENPRINT_ROOT"/usr/libexec/cups/filter/rastertogutenprint*; do
+        if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\n' "$path"; fi
+    done
+    {
+        [ ! -d "$PPD_INSTALL_DIR" ] || find "$PPD_INSTALL_DIR" -maxdepth 2 \( -iname '*gutenprint*' -o -name 'stp-*.ppd*' \)
+        [ ! -d "$GUTENPRINT_ROOT/Library/Receipts" ] || find "$GUTENPRINT_ROOT/Library/Receipts" -maxdepth 1 \( -iname '*gutenprint*' -o -iname '*gimp-print*' \)
+    } 2>/dev/null
+    return 0
+}
+
+gutenprint_found() {
+    [ -n "$(gutenprint_packages)$(gutenprint_files)" ]
+}
+
+# Gutenprint has no P1600dn driver: at best a network queue printed PCL
+# through another model (HP LaserJet 1160), without the printer's duplex,
+# paper codes, status or the page guard. The first install removes it when the
+# user agrees, every confirmed uninstall removes it. P1600dn queues that still
+# use it move to the native PPD first. While another printer prints through
+# Gutenprint, it stays, so that printer keeps working.
+purge_gutenprint() {
+    local ppd queue device pkg path found=0 failed=0 users=()
 
     for ppd in "$CUPS_PPD_DIR"/*.ppd; do
         [ -f "$ppd" ] || continue
@@ -683,20 +789,12 @@ purge_gutenprint() {
         [ -n "$pkg" ] || continue
         found=1
         "$PKGUTIL" --forget "$pkg" >/dev/null 2>&1 || true
-    done < <("$PKGUTIL" --pkgs 2>/dev/null | grep -Ei 'gutenprint|gimp-print' || true)
-    for path in "${paths[@]/#/$GUTENPRINT_ROOT}" "$GUTENPRINT_ROOT"/usr/libexec/cups/filter/rastertogutenprint*; do
-        [ -e "$path" ] || [ -L "$path" ] || continue
-        found=1
-        rm -rf "$path" || failed=1
-    done
+    done < <(gutenprint_packages)
     while IFS= read -r path; do
         [ -n "$path" ] || continue
         found=1
         rm -rf "$path" || failed=1
-    done < <({
-        [ ! -d "$PPD_INSTALL_DIR" ] || find "$PPD_INSTALL_DIR" -maxdepth 2 \( -iname '*gutenprint*' -o -name 'stp-*.ppd*' \)
-        [ ! -d "$GUTENPRINT_ROOT/Library/Receipts" ] || find "$GUTENPRINT_ROOT/Library/Receipts" -maxdepth 1 \( -iname '*gutenprint*' -o -iname '*gimp-print*' \)
-    } 2>/dev/null)
+    done < <(gutenprint_files)
     [ "$failed" -eq 0 ] || return 1
     [ "$found" -eq 0 ] || echo "[i] Gutenprint kaldırıldı / Gutenprint removed."
 }
@@ -766,6 +864,11 @@ configure_printer_queue() {
     printf "CUPS cihaz URI'si / Device URI: "; read -r device_uri || return 1
     if ! is_supported_device_uri "$device_uri"; then print_color "$RED" "[-] Geçersiz veya desteklenmeyen URI / Invalid or unsupported URI."; return 1; fi
     if [ ! -f "$INSTALLED_PPD" ]; then print_color "$RED" "[-] P1600dn serisi PPD'si kurulu değil. Önce seçenek 1'i kullanın / PPD not installed. Run option 1 first."; return 1; fi
+    # lpadmin -p would change an existing queue: its device URI and PPD.
+    if lpstat -p "$queue_name" >/dev/null 2>&1; then
+        print_color "$RED" "[-] '$queue_name' adlı kuyruk zaten var ve değiştirilmedi. Sürücüsünü değiştirmek için [8]'i kullanın veya başka bir ad girin / Queue '$queue_name' already exists and was not changed. Use [8] to switch its driver, or choose another name."
+        return 1
+    fi
     check_sudo || return 1
     if [ "$EUID" -eq 0 ]; then admin_command=(lpadmin); else admin_command=(sudo lpadmin); fi
     if "${admin_command[@]}" -p "$queue_name" -E -v "$device_uri" -P "$INSTALLED_PPD" -D "HP LaserJet Professional P1600dn Series"; then
@@ -848,6 +951,8 @@ DRIVER NASIL KURULUR? / HOW TO INSTALL THE DRIVER
    The script prompts for administrator (sudo) password when root privileges are required.
 4. Kurulum HP LaserJet Professional P1600dn Serisi (P1606dn, P1607dn, P1608dn, P1609dn) PPD'sini doğrular, tüm testleri çalıştırır ve filtreyi sisteme yükler.
    Installation verifies P1600dn series PPD, runs all automated tests, and installs the filter to /Library/Printers/p1600dn/.
+5. İlk kurulum, Gutenprint kuruluysa onu kaldırmayı sorar (başka bir yazıcı kullanıyorsa bırakılır); --yes sormadan kaldırır.
+   The first install offers to remove Gutenprint when it is installed (kept while another printer uses it); --yes removes it without asking.
 Kurulum tek başına kuyruk oluşturmaz; aşağıdaki etkinleştirme adımını da uygulayın.
 Installation does not create a print queue by itself; follow the activation steps below.
 
@@ -941,8 +1046,10 @@ HP LaserJet Professional P1600dn Series (Native ARM64) Driver Manager
 Kullanım / Usage:
   ./p1600dn_manager.command                  Etkileşimli ana menü / Interactive main menu
   ./p1600dn_manager.command --help           Yardım / Help
-  ./p1600dn_manager.command --install        Sudo iste, derle, test et ve kur / Build, test & install
-  ./p1600dn_manager.command --build-pappl    OpenPrinting PAPPL uygulamasını derle (OpenPrinting'e gönderim için) / Build the PAPPL app
+  ./p1600dn_manager.command --install [--yes]
+                                                 Sudo iste, derle, test et ve kur; ilk kurulum Gutenprint'i kaldırmayı sorar
+                                                 Build, test & install; the first install offers to remove Gutenprint
+  ./p1600dn_manager.command --build-pappl    PAPPL Printer Application uygulamasını derle / Build the PAPPL app
   ./p1600dn_manager.command --uninstall [--yes]
                                                  Sürücüyü ve Gutenprint'i kaldır / Remove the driver and Gutenprint
   ./p1600dn_manager.command --enable-airprint
@@ -963,7 +1070,7 @@ EOF
 }
 
 manager_self_test() {
-    local script value boundary_value
+    local script value boundary_value manager_code
     local scripts=("$MANAGER_PATH" "$DRIVER_DIR/p1600dn_manager.sh" "$DRIVER_DIR/test/test_ppds.sh" "$DRIVER_DIR/test/test_status.sh" "$DRIVER_DIR/test/test_manager_modes.sh" "$DRIVER_DIR/test/test_cups_pipeline.sh")
     for script in "${scripts[@]}"; do
         [ -x "$script" ] || { echo "    [FAIL] Script is not executable: $script" >&2; return 1; }
@@ -972,9 +1079,12 @@ manager_self_test() {
     cmp -s "$DRIVER_DIR/p1600dn_manager.command" "$DRIVER_DIR/p1600dn_manager.sh" || return 1
     grep -Fq -- '--test-ppds "$@"' "$DRIVER_DIR/test/test_ppds.sh" || return 1
     grep -Fq -- '--test-status "$@"' "$DRIVER_DIR/test/test_status.sh" || return 1
-    grep -Fq -- 'P1600DN_SOURCE_ONLY' "$MANAGER_PATH" || return 1
-    grep -Fq -- '/usr/bin/xcode-select --install' "$MANAGER_PATH" || return 1
-    grep -Fq -- 'ensure_command_line_tools || return 1' "$MANAGER_PATH" || return 1
+    # The manager's code without these grep lines, each of which contains the
+    # text it looks for.
+    manager_code=$(grep -vF -- 'grep -Fq' "$MANAGER_PATH")
+    grep -Fq -- 'if [ "${P1600DN_SOURCE_ONLY:-0}" != "1" ]; then' <<<"$manager_code" || return 1
+    grep -Fq -- 'if /usr/bin/xcode-select --install; then' <<<"$manager_code" || return 1
+    grep -Fq -- 'ensure_command_line_tools "$action" || return 1' <<<"$manager_code" || return 1
     if ! verify_arm64_binary "$DRIVER_DIR/build/rastertop1600dn" ||
        ! verify_arm64_binary "$DRIVER_DIR/build/p1600dn-status" ||
        ! verify_shared_tools "$DRIVER_DIR/build"; then
@@ -1080,7 +1190,9 @@ main() {
     case "$action" in
         --interactive) [ "$#" -eq 1 ] || return 2; interactive_menu ;;
         --help|-h) [ "$#" -eq 1 ] || return 2; print_cli_help ;;
-        --install) [ "$#" -eq 1 ] || return 2; execute_privileged_action --install ;;
+        --install)
+            if [ "${2:-}" = "--yes" ] && [ "$#" -eq 2 ]; then ASSUME_YES=1; elif [ "$#" -ne 1 ]; then return 2; fi
+            if [ "$ASSUME_YES" -eq 1 ]; then execute_privileged_action --install --yes; else execute_privileged_action --install; fi ;;
         --build-pappl) [ "$#" -eq 1 ] || return 2; build_pappl_target ;;
         --uninstall)
             if [ "${2:-}" = "--yes" ] && [ "$#" -eq 2 ]; then ASSUME_YES=1; elif [ "$#" -ne 1 ]; then return 2; fi

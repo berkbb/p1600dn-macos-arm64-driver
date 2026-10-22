@@ -44,11 +44,31 @@ LEGACY_INSTALL_DIR="$test_root/system/Library/Printers/hp_p1606dn"
 LEGACY_PPD="$test_root/system/Library/Printers/PPDs/Contents/Resources/HP-LaserJet-P1606dn-ARM.ppd"
 OPENPRINTING_FILTER="$LEGACY_INSTALL_DIR/rastertohpp1606dn-openprinting"
 OPENPRINTING_ENCODER="$LEGACY_INSTALL_DIR/foo2zjs-openprinting"
+OPENPRINTING_LICENSE="$LEGACY_INSTALL_DIR/OpenPrinting-foo2zjs-COPYING"
+OPENPRINTING_INSTALLED_PPD="$test_root/system/Library/Printers/PPDs/Contents/Resources/HP-LaserJet-P1606dn-OpenPrinting.ppd"
 launchctl_log="$test_root/launchctl.log"
 LAUNCHCTL="$test_root/launchctl"
 printf '#!/bin/sh\necho "$*" >>"%s"\n' "$launchctl_log" >"$LAUNCHCTL"
 chmod 755 "$LAUNCHCTL"
 console_user_id() { echo 501; }
+# Two GUI sessions (501 at the console, 502 behind fast user switching) and
+# the login window (root).
+ps() {
+    printf '%s\n' "  501 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow" \
+        "    0 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow" \
+        "  502 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow" \
+        "  502 /usr/bin/login"
+}
+# Every system path an install or uninstall writes points into the test tree
+# from the start: make test runs this suite as root during --install.
+INSTALL_DIR="$test_root/system/Library/Printers/p1600dn"
+PPD_INSTALL_DIR="$test_root/system/Library/Printers/PPDs/Contents/Resources"
+INSTALLED_PPD="$PPD_INSTALL_DIR/P1600dn-Series.ppd"
+# lsregister only records its calls; the user's copy runs through launchctl.
+lsregister_log="$test_root/lsregister.log"
+LSREGISTER="$test_root/lsregister"
+printf '#!/bin/sh\necho "$*" >>"%s"\n' "$lsregister_log" >"$LSREGISTER"
+chmod 755 "$LSREGISTER"
 # Gutenprint lives under the test tree, and pkgutil lists $test_root/pkgs and
 # records the rest of its calls.
 GUTENPRINT_ROOT="$test_root/system"
@@ -65,6 +85,19 @@ plant_gutenprint() {
     echo "org.gutenprint.synthetic" >"$test_root/pkgs"
 }
 
+# Fails unless every path an install or uninstall touches is in the test tree.
+assert_isolated() {
+    local path
+    for path in "$INSTALL_DIR" "${INSTALL_DIR%/*}/hp1010dn" "$PPD_INSTALL_DIR" "$INSTALLED_PPD" \
+                "$LEGACY_INSTALL_DIR" "$LEGACY_PPD" "$OPENPRINTING_FILTER" "$OPENPRINTING_ENCODER" \
+                "$OPENPRINTING_LICENSE" "$OPENPRINTING_INSTALLED_PPD" "$LAUNCH_AGENTS_DIR" "$LAUNCH_DAEMONS_DIR" "$CUPS_PPD_DIR" "$GUTENPRINT_ROOT/Library"; do
+        case "$path" in
+            "$test_root"/*) ;;
+            *) fail "Not isolated, the test would touch $path" ;;
+        esac
+    done
+}
+
 gutenprint_present() {
     [ -e "$GUTENPRINT_ROOT/Library/Printers/Gutenprint.printerDriver" ] ||
         [ -e "$GUTENPRINT_ROOT/Library/Receipts/Gutenprint.pkg" ] ||
@@ -72,13 +105,29 @@ gutenprint_present() {
 }
 
 test_install_mode() {
-    INSTALL_DIR="$test_root/system/Library/Printers/p1600dn"
-    PPD_INSTALL_DIR="$test_root/system/Library/Printers/PPDs/Contents/Resources"
-    INSTALLED_PPD="$PPD_INSTALL_DIR/P1600dn-Series.ppd"
+    assert_isolated
     : >"$workflow_log"
     plant_gutenprint
 
-    install_driver >"$test_root/install.out" 2>"$test_root/install.err" || fail "Install workflow failed"
+    # The first install asks before it removes Gutenprint; "no" keeps it.
+    (
+        INSTALL_DIR="$test_root/install-keep/driver"
+        PPD_INSTALL_DIR="$test_root/install-keep/ppds"
+        INSTALLED_PPD="$PPD_INSTALL_DIR/P1600dn-Series.ppd"
+        assert_isolated
+        plant_gutenprint
+        install_driver <<<'h' >"$test_root/install-keep.out" 2>&1 || exit 1
+        gutenprint_present || exit 1
+        [ -f "$INSTALLED_PPD" ] || exit 1
+    ) || fail "Answering no on the first install did not keep Gutenprint"
+    assert_contains "$test_root/install-keep.out" "Gutenprint kurulu; P1600dn için gerekmiyor. Kaldırılsın mı?"
+    assert_contains "$test_root/install-keep.out" "Gutenprint bırakılıyor"
+    : >"$pkgutil_log"
+
+    # A strict umask (CIS: 027) must not lock _lp, nobody and the user out.
+    ( umask 077; install_driver <<<'e' >"$test_root/install.out" 2>"$test_root/install.err" ) || fail "Install workflow failed"
+    [ "$(stat -f '%Lp' "$INSTALL_DIR")" = "755" ] || fail "Install folder mode is not 755 under umask 077"
+    assert_contains "$test_root/install.out" "Gutenprint kurulu; P1600dn için gerekmiyor. Kaldırılsın mı?"
     ! gutenprint_present || fail "The first install left Gutenprint behind"
     assert_contains "$pkgutil_log" "--forget org.gutenprint.synthetic"
     assert_contains "$test_root/install.out" "Gutenprint kaldırıldı"
@@ -93,6 +142,19 @@ test_install_mode() {
     assert_file "$LAUNCH_AGENTS_DIR/com.berkbb.p1600dn.notifier.plist"
     [ "$(stat -f '%Lp' "$LAUNCH_AGENTS_DIR/com.berkbb.p1600dn.notifier.plist")" = "644" ] || fail "Notifier LaunchAgent mode is not 644"
     assert_contains "$launchctl_log" "bootstrap gui/501 $LAUNCH_AGENTS_DIR/com.berkbb.p1600dn.notifier.plist"
+    # The session behind fast user switching gets the new notifier too.
+    assert_contains "$launchctl_log" "bootout gui/502/com.berkbb.p1600dn.notifier"
+    assert_contains "$launchctl_log" "bootstrap gui/502 $LAUNCH_AGENTS_DIR/com.berkbb.p1600dn.notifier.plist"
+    if grep -Fq -- "gui/0" "$launchctl_log"; then fail "The login window (root) got a LaunchAgent"; fi
+    for installed_app in "P1600dn Series Utility.app" "P1600dn Notifier.app"; do
+        [ -z "$(find "$INSTALL_DIR/$installed_app" -type f ! -perm 644 ! -path '*/Contents/MacOS/*')" ] || fail "$installed_app has files that are not 644"
+        [ -z "$(find "$INSTALL_DIR/$installed_app" -type d ! -perm 755)" ] || fail "$installed_app has directories that are not 755"
+    done
+    [ "$(stat -f '%Lp' "$INSTALL_DIR/P1600dn Notifier.app/Contents/MacOS/P1600dnNotifier")" = "755" ] || fail "Notifier executable is not 755"
+    assert_contains "$lsregister_log" "-f $INSTALL_DIR/P1600dn Series Utility.app"
+    assert_contains "$lsregister_log" "-f $INSTALL_DIR/P1600dn Notifier.app"
+    assert_contains "$launchctl_log" "asuser 501 /usr/bin/sudo -u #501 $LSREGISTER -f $INSTALL_DIR/P1600dn Notifier.app"
+    assert_contains "$launchctl_log" "asuser 502 /usr/bin/sudo -u #502 $LSREGISTER -f $INSTALL_DIR/P1600dn Notifier.app"
     assert_file "$INSTALL_DIR/p1600dn-airprint"
     assert_file "$INSTALL_DIR/P1600dnPrinter.png"
     [ -x "$INSTALL_DIR/p1600dn-airprint" ] || fail "Installed AirPrint server is not executable"
@@ -110,10 +172,21 @@ test_install_mode() {
     # A reinstall or update is not a first install: Gutenprint stays.
     plant_gutenprint
     : >"$pkgutil_log"
+    # The old signed binaries stay alive through a hard link, as they do for a
+    # running filter or AirPrint server: a reinstall must replace the files,
+    # not write over them (macOS would kill those processes).
+    local replaced
+    for replaced in rastertop1600dn p1600dn-status commandtop1600dn p1600dn-utility p1600dn-airprint; do
+        ln "$INSTALL_DIR/$replaced" "$test_root/running-$replaced" || fail "Could not link $replaced"
+    done
     install_driver >"$test_root/reinstall.out" 2>"$test_root/reinstall.err" || fail "Reinstall workflow failed"
+    for replaced in rastertop1600dn p1600dn-status commandtop1600dn p1600dn-utility p1600dn-airprint; do
+        [ "$(stat -f '%i' "$INSTALL_DIR/$replaced")" != "$(stat -f '%i' "$test_root/running-$replaced")" ] ||
+            fail "A reinstall wrote over the running $replaced in place"
+    done
     gutenprint_present || fail "A reinstall removed Gutenprint"
     [ ! -s "$pkgutil_log" ] || fail "A reinstall touched Gutenprint's package receipts"
-    echo "    [PASS] Mode 1: Build/Test/Install Workflow, Gutenprint Removed on First Install Only (isolated filesystem)"
+    echo "    [PASS] Mode 1: Build/Test/Install Workflow, Gutenprint Removed on First Install Only After Asking, Folder 755 Under umask 077, Binaries Replaced, Every GUI Session (isolated filesystem)"
 }
 
 test_install_failure_matrix() {
@@ -123,6 +196,10 @@ test_install_failure_matrix() {
             INSTALL_DIR="$test_root/install-failure-$scenario/driver"
             PPD_INSTALL_DIR="$test_root/install-failure-$scenario/ppds"
             INSTALLED_PPD="$PPD_INSTALL_DIR/P1600dn-Series.ppd"
+            assert_isolated
+            # build/ goes back to the sudo user also when the install stops.
+            SUDO_USER="p1600dn-test-user"
+            chown() { printf 'chown %s\n' "$*" >>"$test_root/install-failure-$scenario.chown"; }
             require_root() { [ "$scenario" != "root" ]; }
             make() {
                 if [ "$scenario" = "clean" ] && [ "${1:-}" = "clean" ]; then return 1; fi
@@ -130,16 +207,17 @@ test_install_failure_matrix() {
                 return 0
             }
             verify_arm64_binary() { [ "$scenario" != "architecture" ]; }
-            if install_driver >"$test_root/install-failure-$scenario.out" 2>"$test_root/install-failure-$scenario.err"; then
+            if install_driver </dev/null >"$test_root/install-failure-$scenario.out" 2>"$test_root/install-failure-$scenario.err"; then
                 exit 1
             fi
+            grep -Fqx -- "chown -R p1600dn-test-user build" "$test_root/install-failure-$scenario.chown" || exit 1
             [ ! -e "$INSTALL_DIR/rastertop1600dn" ] || exit 1
             [ ! -e "$INSTALL_DIR/commandtop1600dn" ] || exit 1
             [ ! -e "$INSTALLED_PPD" ] || exit 1
         ) || fail "Install failure path did not stop safely: $scenario"
     done
     assert_contains "$test_root/install-failure-architecture.err" "arm64 mimarisinde değil"
-    echo "    [PASS] Mode 1: Root/Build/Test/Architecture Failure Matrix"
+    echo "    [PASS] Mode 1: Root/Build/Test/Architecture Failure Matrix (build/ returned to the sudo user)"
 }
 
 test_airprint_mode() {
@@ -167,18 +245,47 @@ test_airprint_mode() {
     echo "    [PASS] Mode 9: AirPrint On/Off (LaunchDaemon as nobody, restart on reinstall, needs the driver)"
 }
 
+# The duplicate-printer warning only while macOS Printer Sharing is on.
+test_airprint_sharing_warning() {
+    (
+        p1600dn_queue_names() { echo Ofis; }
+        lpoptions() { echo "printer-is-shared=true"; }
+        enable_airprint >"$test_root/airprint-sharing-off.out" 2>&1 || exit 1
+        if grep -Fq "appears twice" "$test_root/airprint-sharing-off.out"; then exit 1; fi
+        cupsctl() { echo "_share_printers=1"; }
+        enable_airprint >"$test_root/airprint-sharing-on.out" 2>&1 || exit 1
+        grep -Fq "Ofis is also shared by macOS Printer Sharing" "$test_root/airprint-sharing-on.out"
+    ) || fail "The AirPrint duplicate-printer warning ignores whether macOS Printer Sharing is on"
+    echo "    [PASS] Mode 9: Duplicate-Printer Warning Only While macOS Printer Sharing Is On"
+}
+
 test_uninstall_mode() {
+    assert_isolated
+    # An old OpenPrinting fallback and the old hp1010dn module next to the
+    # driver go too; both are in the test tree, so the test never reaches /Library.
+    mkdir -p "${INSTALL_DIR%/*}/hp1010dn" "$LEGACY_INSTALL_DIR"
+    : >"$OPENPRINTING_FILTER"
+    : >"$OPENPRINTING_ENCODER"
+    : >"$OPENPRINTING_LICENSE"  # 3.1 copied foo2zjs's COPYING
+    : >"$OPENPRINTING_INSTALLED_PPD"
+    : >"$launchctl_log"
     ASSUME_YES=1
     uninstall_driver >"$test_root/uninstall.out" 2>"$test_root/uninstall.err" || fail "Uninstall workflow failed"
     [ ! -e "$INSTALL_DIR" ] || fail "Driver directory remained after uninstall"
     [ ! -e "$INSTALLED_PPD" ] || fail "PPD remained after uninstall"
     [ ! -e "$LAUNCH_AGENTS_DIR/com.berkbb.p1600dn.notifier.plist" ] || fail "Notifier LaunchAgent remained after uninstall"
     assert_contains "$launchctl_log" "bootout gui/501/com.berkbb.p1600dn.notifier"
+    assert_contains "$launchctl_log" "bootout gui/502/com.berkbb.p1600dn.notifier"
+    assert_contains "$launchctl_log" "asuser 502 /usr/bin/sudo -u #502 $LSREGISTER -u $INSTALL_DIR/P1600dn Notifier.app"
+    [ ! -e "${INSTALL_DIR%/*}/hp1010dn" ] || fail "The old hp1010dn module remained after uninstall"
+    [ ! -e "$OPENPRINTING_INSTALLED_PPD" ] && [ ! -e "$OPENPRINTING_LICENSE" ] || fail "The OpenPrinting fallback remained after uninstall"
+    assert_contains "$lsregister_log" "-u $INSTALL_DIR/P1600dn Series Utility.app"
+    assert_contains "$lsregister_log" "-u $INSTALL_DIR/P1600dn Notifier.app"
     [ ! -e "$LAUNCH_DAEMONS_DIR/com.berkbb.p1600dn.airprint.plist" ] || fail "AirPrint LaunchDaemon remained after uninstall"
     ! gutenprint_present || fail "Uninstall left Gutenprint behind"
     assert_contains "$test_root/uninstall.out" "Gutenprint kaldırıldı"
     assert_contains "$test_root/uninstall.out" "sürücüsü ve PPD'si kaldırıldı"
-    echo "    [PASS] Mode 2: Uninstall Workflow, Gutenprint Removed Without Asking (isolated filesystem)"
+    echo "    [PASS] Mode 2: Uninstall Workflow, Gutenprint Removed Once Confirmed, Every GUI Session (isolated filesystem)"
 }
 
 test_uninstall_cancel_and_root_failure() {
@@ -292,6 +399,9 @@ test_run_tests_failure_mode() {
     echo "    [PASS] Mode 3: Failed Test Suite Propagation"
 }
 
+# macOS Printer Sharing is off.
+cupsctl() { echo "_share_printers=0"; }
+
 lpinfo() {
     echo "network socket://192.0.2.10:9100"
     echo "direct usb://HP/LaserJet%20Professional%20P1606dn"
@@ -303,8 +413,10 @@ lpstat() {
             if [ "${2:-}" = "-d" ]; then
                 echo "printer Fakülte is idle. enabled since test"
                 echo "system default destination: Fakülte"
-            else
+            elif [ -z "${2:-}" ] || [ "${2:-}" = "Fakülte" ]; then
                 echo "printer ${2:-Fakülte} is idle. enabled since test"
+            else
+                return 1  # only Fakülte exists
             fi
             return 0
             ;;
@@ -334,11 +446,21 @@ test_system_status_mode() {
     : >"$INSTALLED_PPD"
     chmod 755 "$INSTALL_DIR/rastertop1600dn" "$INSTALL_DIR/p1600dn-status"
     show_system_status >"$test_root/system-status.out" 2>"$test_root/system-status.err"
-    assert_contains "$test_root/system-status.out" "Raster filtresi kurulu"
-    assert_contains "$test_root/system-status.out" "Durum aracı kurulu"
-    assert_contains "$test_root/system-status.out" "PPD'si kurulu"
+    # With the English half: "... kurulu" alone also starts "... kurulu değil".
+    assert_contains "$test_root/system-status.out" "Raster filtresi kurulu / Raster filter installed"
+    assert_contains "$test_root/system-status.out" "Durum aracı kurulu / Status utility installed"
+    assert_contains "$test_root/system-status.out" "PPD'si kurulu / PPD is installed"
     assert_contains "$test_root/system-status.out" "system default destination"
-    echo "    [PASS] Mode 4: Installation/Activity/CUPS Status Workflow"
+    # Nothing installed: the same lines say so.
+    (
+        INSTALL_DIR="$test_root/status-empty/p1600_p1606dn"
+        INSTALLED_PPD="$test_root/status-empty/P1600dn-Series.ppd"
+        show_system_status >"$test_root/system-status-empty.out" 2>&1
+    ) || fail "Status workflow failed without an installed driver"
+    assert_contains "$test_root/system-status-empty.out" "Raster filtresi kurulu değil / Raster filter is not installed"
+    assert_contains "$test_root/system-status-empty.out" "Durum aracı kurulu değil / Status utility is not installed"
+    assert_contains "$test_root/system-status-empty.out" "PPD'si kurulu değil / PPD is not installed"
+    echo "    [PASS] Mode 4: Installation/Activity/CUPS Status Workflow (installed and not installed)"
 }
 
 test_system_status_missing_mode() {
@@ -384,6 +506,29 @@ EOF
     assert_contains "$workflow_log" "lpadmin <-p> <HP_LaserJet_P1606dn> <-E> <-v> <usb://HP/LaserJet%20Professional%20P1606dn>"
     assert_contains "$test_root/add-queue.out" "Kuyruk oluşturuldu ve etkinleştirildi"
     echo "    [PASS] Mode 6: Add Queue/Activate Driver Workflow"
+}
+
+# lpadmin -p would replace an existing queue's device URI and PPD.
+test_add_queue_existing_mode() {
+    : >"$workflow_log"
+    (
+        INSTALLED_PPD="$test_root/add-existing.ppd"
+        : >"$INSTALLED_PPD"
+        lpstat() {
+            case "${1:-} ${2:-}" in
+                "-p Ofis") echo "printer Ofis is idle." ;;
+                *) return 1 ;;
+            esac
+        }
+        if configure_printer_queue <<'EOF'
+Ofis
+socket://192.0.2.20:9100
+EOF
+        then exit 1; fi
+    ) >"$test_root/add-existing.out" 2>&1 || fail "Add Queue changed the existing queue Ofis"
+    [ ! -s "$workflow_log" ] || fail "Add Queue sent lpadmin for an existing queue"
+    assert_contains "$test_root/add-existing.out" "zaten var ve değiştirilmedi"
+    echo "    [PASS] Mode 6: An Existing Queue Is Not Replaced"
 }
 
 test_add_queue_rejection_matrix() {
@@ -550,13 +695,16 @@ test_openprinting_retirement_mode() {
         INSTALL_DIR="$test_root/retire/driver"
         PPD_INSTALL_DIR="$test_root/retire/ppds"
         INSTALLED_PPD="$PPD_INSTALL_DIR/P1600dn-Series.ppd"
-        OPENPRINTING_FILTER="$INSTALL_DIR/rastertohpp1606dn-openprinting"
-        OPENPRINTING_ENCODER="$INSTALL_DIR/foo2zjs-openprinting"
+        LEGACY_INSTALL_DIR="$test_root/retire/hp_p1606dn"
+        OPENPRINTING_FILTER="$LEGACY_INSTALL_DIR/rastertohpp1606dn-openprinting"
+        OPENPRINTING_ENCODER="$LEGACY_INSTALL_DIR/foo2zjs-openprinting"
+        OPENPRINTING_LICENSE="$LEGACY_INSTALL_DIR/OpenPrinting-foo2zjs-COPYING"
         OPENPRINTING_INSTALLED_PPD="$PPD_INSTALL_DIR/HP-LaserJet-P1606dn-OpenPrinting.ppd"
-        mkdir -p "$CUPS_PPD_DIR" "$INSTALL_DIR" "$PPD_INSTALL_DIR"
+        mkdir -p "$CUPS_PPD_DIR" "$LEGACY_INSTALL_DIR" "$PPD_INSTALL_DIR"
         : >"$INSTALLED_PPD"
         : >"$OPENPRINTING_FILTER"
         : >"$OPENPRINTING_ENCODER"
+        : >"$OPENPRINTING_LICENSE"
         : >"$OPENPRINTING_INSTALLED_PPD"
         printf '*cupsFilter: "application/vnd.cups-raster 0 /Library/Printers/hp_p1606dn/rastertohpp1606dn-openprinting"\n' \
             >"$CUPS_PPD_DIR/Fakülte.ppd"
@@ -564,7 +712,8 @@ test_openprinting_retirement_mode() {
             >"$CUPS_PPD_DIR/Native.ppd"
         : >"$workflow_log"
         retire_openprinting_fallback
-        [ ! -e "$OPENPRINTING_FILTER" ] && [ ! -e "$OPENPRINTING_ENCODER" ] && [ ! -e "$OPENPRINTING_INSTALLED_PPD" ] || exit 1
+        [ ! -e "$OPENPRINTING_FILTER" ] && [ ! -e "$OPENPRINTING_ENCODER" ] && [ ! -e "$OPENPRINTING_LICENSE" ] &&
+            [ ! -e "$OPENPRINTING_INSTALLED_PPD" ] || exit 1
         grep -Fq "lpadmin <-p> <Fakülte> <-E> <-P> <$INSTALLED_PPD>" "$workflow_log" || exit 1
         if grep -Fq '<Native>' "$workflow_log"; then exit 1; fi
         # Nothing left to retire: no change, no error.
@@ -699,7 +848,6 @@ EOF
 test_cli_dispatch_matrix() {
     (
         dispatch_log="$test_root/cli.log"
-        : >"$dispatch_log"
         interactive_menu() { echo interactive >>"$dispatch_log"; }
         print_cli_help() { echo help >>"$dispatch_log"; }
         execute_privileged_action() { printf 'privileged %s\n' "$*" >>"$dispatch_log"; }
@@ -711,54 +859,70 @@ test_cli_dispatch_matrix() {
         configure_printer_queue() { echo add-printer >>"$dispatch_log"; }
         update_printer_driver() { printf 'update-printer <%s>\n' "${1:-}" >>"$dispatch_log"; }
         build_pappl_target() { echo build-pappl >>"$dispatch_log"; }
-        main
-        main --interactive
-        main --help
-        main -h
-        main --install
-        main --build-pappl
-        main --uninstall
-        main --uninstall --yes
-        main --test-ppds
-        main --test-status
-        main --test-status synthetic-status
-        main --self-test
-        main --test
-        main --status
-        main --status Fakülte
-        main --add-printer
-        main --update-printer
-        main --update-printer Fakülte
-        main --enable-airprint
-        main --disable-airprint
-        for expected in interactive help 'privileged --install' build-pappl 'privileged --uninstall' \
-            'privileged --uninstall --yes' test-ppd 'test-status <./build/p1600dn-status>' \
-            'test-status <synthetic-status>' self-test test 'status <>' 'status <Fakülte>' add-printer \
-            'update-printer <>' 'update-printer <Fakülte>' 'privileged --enable-airprint' \
-            'privileged --disable-airprint'; do
-            grep -Fq -- "$expected" "$dispatch_log" || exit 1
-        done
-        if grep -Fq -- 'gutenprint' "$dispatch_log"; then exit 1; fi
-        set +e
-        main --invalid >/dev/null 2>&1; invalid_status=$?
-        main --build-pappl one two >/dev/null 2>&1; pappl_arity=$?
-        main --status one two >/dev/null 2>&1; status_arity=$?
-        main --update-printer one two >/dev/null 2>&1; update_arity=$?
-        main --build-openprinting >/dev/null 2>&1; removed_openprinting=$?
-        main --uninstall-gutenprint >/dev/null 2>&1; removed_gutenprint=$?
-        main --test-status one two >/dev/null 2>&1; test_status_arity=$?
-        main --enable-airprint now >/dev/null 2>&1; airprint_arity=$?
-        set -e
-        [ "$airprint_arity" -eq 2 ] || exit 1
-        [ "$invalid_status" -eq 2 ] || exit 1
-        [ "$pappl_arity" -eq 2 ] || exit 1
-        [ "$status_arity" -eq 2 ] || exit 1
-        [ "$update_arity" -eq 2 ] || exit 1
-        [ "$removed_openprinting" -eq 2 ] || exit 1
-        [ "$removed_gutenprint" -eq 2 ] || exit 1
-        [ "$test_status_arity" -eq 2 ] || exit 1
+        # Each call alone: main must return 0 and run exactly the expected
+        # action (one log line, compared whole), so a dropped case or alias
+        # that falls through to "Bilinmeyen işlem" (exit 2) fails here.
+        dispatches() {
+            local expected="$1" status
+            shift
+            : >"$dispatch_log"
+            main "$@" >/dev/null 2>&1
+            status=$?
+            [ "$status" -eq 0 ] || { echo "main $* returned $status" >&2; return 1; }
+            [ "$(cat "$dispatch_log")" = "$expected" ] ||
+                { echo "main $* ran '$(cat "$dispatch_log")' instead of '$expected'" >&2; return 1; }
+        }
+        rejects() {
+            local status
+            : >"$dispatch_log"
+            main "$@" >/dev/null 2>&1
+            status=$?
+            [ "$status" -eq 2 ] || { echo "main $* returned $status instead of 2" >&2; return 1; }
+            [ ! -s "$dispatch_log" ] || { echo "main $* ran '$(cat "$dispatch_log")'" >&2; return 1; }
+        }
+        dispatches interactive || exit 1
+        dispatches interactive --interactive || exit 1
+        dispatches help --help || exit 1
+        dispatches help -h || exit 1
+        dispatches 'privileged --install' --install || exit 1
+        dispatches 'privileged --install --yes' --install --yes || exit 1
+        dispatches build-pappl --build-pappl || exit 1
+        dispatches 'privileged --uninstall' --uninstall || exit 1
+        dispatches 'privileged --uninstall --yes' --uninstall --yes || exit 1
+        dispatches test-ppd --test-ppds || exit 1
+        dispatches 'test-status <./build/p1600dn-status>' --test-status || exit 1
+        dispatches 'test-status <synthetic-status>' --test-status synthetic-status || exit 1
+        dispatches self-test --self-test || exit 1
+        dispatches test --test || exit 1
+        dispatches 'status <>' --status || exit 1
+        dispatches 'status <Fakülte>' --status Fakülte || exit 1
+        dispatches add-printer --add-printer || exit 1
+        dispatches 'update-printer <>' --update-printer || exit 1
+        dispatches 'update-printer <Fakülte>' --update-printer Fakülte || exit 1
+        dispatches 'privileged --enable-airprint' --enable-airprint || exit 1
+        dispatches 'privileged --disable-airprint' --disable-airprint || exit 1
+        rejects --invalid || exit 1
+        rejects --help extra || exit 1
+        rejects -h extra || exit 1
+        rejects --interactive extra || exit 1
+        rejects --install extra || exit 1
+        rejects --install --yes extra || exit 1
+        rejects --build-pappl one two || exit 1
+        rejects --uninstall extra || exit 1
+        rejects --uninstall --yes extra || exit 1
+        rejects --test extra || exit 1
+        rejects --test-ppds extra || exit 1
+        rejects --self-test extra || exit 1
+        rejects --status one two || exit 1
+        rejects --add-printer extra || exit 1
+        rejects --update-printer one two || exit 1
+        rejects --test-status one two || exit 1
+        rejects --enable-airprint now || exit 1
+        rejects --disable-airprint now || exit 1
+        rejects --build-openprinting || exit 1
+        rejects --uninstall-gutenprint || exit 1
     ) || fail "CLI action/arity dispatch matrix failed"
-    echo "    [PASS] Every CLI Action, Alias, Optional Argument, and Arity Boundary"
+    echo "    [PASS] Every CLI Action, Alias, Optional Argument, and Arity Boundary (exact action and exit status per call)"
 }
 
 test_wrapper_scripts() {
@@ -798,6 +962,7 @@ EOF
 echo "[*] Starting isolated manager mode and wrapper tests..."
 test_install_mode
 test_airprint_mode
+test_airprint_sharing_warning
 test_install_failure_matrix
 test_uninstall_mode
 test_uninstall_cancel_and_root_failure
@@ -809,6 +974,7 @@ test_system_status_missing_mode
 test_printer_status_mode
 test_printer_status_build_failure
 test_add_queue_mode
+test_add_queue_existing_mode
 test_add_queue_rejection_matrix
 test_help_mode
 test_help_submenu_dispatch_matrix
