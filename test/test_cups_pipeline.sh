@@ -252,27 +252,56 @@ run_chain() {
     rm -f "$raster" "$output"
 }
 
-pipeline_ppd="$test_root/full-pipeline.ppd"
-pipeline_filters="$test_root/full-pipeline.filters"
-awk -v filter="$filter_binary" '
-    index($0, "*cupsFilter:") == 1 {
-        print "*cupsFilter: \"application/vnd.cups-raster 0 " filter "\""
-        next
-    }
-    { print }
-' "$ppd" >"$pipeline_ppd"
+# cupsfilter refuses PPD lines over 255 bytes, and the PPD names the filter
+# by its path: a driver folder with a long path names it through a short
+# link (in mktemp's folder, root's and 0700 when the tests run as root).
+ppd_filter_path() {
+    if [ "$(printf '%s' "$1" | wc -c)" -le 150 ]; then
+        printf '%s\n' "$1"
+    else
+        ln -s "$1" "$2" && printf '%s\n' "$2"
+    fi
+}
 
-make_input 1 "$test_root/full-pipeline.txt"
-if ! "$cupsfilter_binary" --list-filters -e -m printer/p1600dn -p "$pipeline_ppd" \
-        -i text/plain "$test_root/full-pipeline.txt" >"$pipeline_filters" 2>"$test_root/full-pipeline-list.log"; then
-    sed 's/^/        /' "$test_root/full-pipeline-list.log" >&2
-    fail "CUPS could not resolve the complete PPD filter chain"
-fi
-[ "$(sed -n '1p' "$pipeline_filters")" = "cgtexttopdf" ] || fail "full chain did not start with cgtexttopdf"
-[ "$(sed -n '2p' "$pipeline_filters")" = "cgpdftoraster" ] || fail "full chain omitted cgpdftoraster"
-[ "$(sed -n '3p' "$pipeline_filters")" = "$filter_binary" ] || fail "full chain omitted the P1600dn filter"
-[ "$(wc -l <"$pipeline_filters" | tr -d ' ')" -eq 3 ] || fail "full chain contains unexpected filters"
+# The project PPD with `filter` as its raster filter, and the chain CUPS
+# resolves for it (cgtexttopdf -> cgpdftoraster -> the filter).
+write_pipeline_ppd() {
+    awk -v filter="$1" '
+        index($0, "*cupsFilter:") == 1 {
+            print "*cupsFilter: \"application/vnd.cups-raster 0 " filter "\""
+            next
+        }
+        { print }
+    ' "$ppd" >"$2"
+}
+check_chain() {
+    local chain_ppd="$1" filter="$2" filters="$test_root/$3.filters"
+    [ -f "$test_root/full-pipeline.txt" ] || make_input 1 "$test_root/full-pipeline.txt"
+    if ! "$cupsfilter_binary" --list-filters -e -m printer/p1600dn -p "$chain_ppd" \
+            -i text/plain "$test_root/full-pipeline.txt" >"$filters" 2>"$test_root/$3-list.log"; then
+        sed 's/^/        /' "$test_root/$3-list.log" >&2
+        fail "CUPS could not resolve the complete PPD filter chain ($3)"
+    fi
+    [ "$(sed -n '1p' "$filters")" = "cgtexttopdf" ] || fail "full chain did not start with cgtexttopdf ($3)"
+    [ "$(sed -n '2p' "$filters")" = "cgpdftoraster" ] || fail "full chain omitted cgpdftoraster ($3)"
+    [ "$(sed -n '3p' "$filters")" = "$filter" ] || fail "full chain omitted the P1600dn filter ($3)"
+    [ "$(wc -l <"$filters" | tr -d ' ')" -eq 3 ] || fail "full chain contains unexpected filters ($3)"
+}
+
+pipeline_ppd="$test_root/full-pipeline.ppd"
+pipeline_filter=$(ppd_filter_path "$filter_binary" "$test_root/rastertop1600dn") || fail "could not link the filter"
+write_pipeline_ppd "$pipeline_filter" "$pipeline_ppd"
+check_chain "$pipeline_ppd" "$pipeline_filter" full-pipeline
 echo "    [PASS] PPD resolves cgtexttopdf -> cgpdftoraster -> $(basename "$filter_binary")"
+
+# A driver folder whose path is too long for a PPD line.
+long_dir="$test_root/$(printf 'd%.0s' {1..60})/$(printf 'e%.0s' {1..60})/$(printf 'f%.0s' {1..60})"
+mkdir -p "$long_dir" && ln -s "$filter_binary" "$long_dir/rastertop1600dn" || fail "could not prepare a long path"
+long_filter=$(ppd_filter_path "$long_dir/rastertop1600dn" "$test_root/rastertop1600dn-long") ||
+    fail "could not link the filter of a long path"
+write_pipeline_ppd "$long_filter" "$test_root/long-path.ppd"
+check_chain "$test_root/long-path.ppd" "$long_filter" long-path
+echo "    [PASS] A $(printf '%s' "$long_dir/rastertop1600dn" | wc -c | tr -d ' ')-byte filter path, too long for a PPD line, still resolves"
 
 run_chain chain-default "$pipeline_ppd" 2 2 \
     -- paper=9 source=7 media=1 bpp=2 density=3

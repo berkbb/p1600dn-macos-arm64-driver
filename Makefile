@@ -10,7 +10,7 @@ LDFLAGS ?= -lcups $(ARCH_FLAGS) -Wl,-dead_strip
 # Shipped binaries get an ad-hoc signature with the hardened runtime, the form
 # notarization needs (a Developer ID signature replaces it for distribution).
 SIGN = /usr/bin/codesign --force --sign - --options runtime --identifier com.berkbb.p1600dn.$(notdir $@) $@
-SANITIZER_FLAGS ?= -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc -Ibuild $(ARCH_FLAGS)
+SANITIZER_FLAGS ?= -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -Isrc -Ibuild $(ARCH_FLAGS)
 THREAD_SANITIZER_FLAGS ?= -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror -fsanitize=thread -fno-omit-frame-pointer -Isrc -Ibuild $(ARCH_FLAGS)
 ANALYZE_FLAGS ?= -std=c11 -Wall -Wextra -Wpedantic -Werror -Isrc -Ibuild $(ARCH_FLAGS)
 COVERAGE_FLAGS ?= -O0 -g -std=c11 -Wall -Wextra -Wpedantic -Werror -fprofile-instr-generate -fcoverage-mapping -Isrc -Ibuild $(ARCH_FLAGS)
@@ -239,7 +239,8 @@ test-manager: $(TARGET) $(STATUS_TARGET) $(COMMAND_TARGET) $(UTILITY_TARGET) $(U
 
 test: test-screens test-unit test-protocol test-guard test-filter test-filter-modes test-cups-pipeline test-encoder-pool test-ustatus test-supplies test-transport test-utility test-diagnostic test-utility-app test-notify test-notifier-app test-airprint test-ppd test-status test-manager
 
-test-sanitize: $(SCREEN_TABLES) | $(BUILD_DIR)
+# The utility and AirPrint checks also run the regular filter and utility.
+test-sanitize: $(SCREEN_TABLES) $(TARGET) $(UTILITY_TARGET) | $(BUILD_DIR)
 	$(CC) $(SANITIZER_FLAGS) $(TEST_DIR)/test_driver.c $(RENDER_SRCS) -lcups -o $(BUILD_DIR)/test_driver_sanitize
 	@$(BUILD_DIR)/test_driver_sanitize
 	$(CC) $(SANITIZER_FLAGS) $(TEST_DIR)/test_protocol.c $(ENCODER_SRCS) -o $(BUILD_DIR)/test_protocol_sanitize
