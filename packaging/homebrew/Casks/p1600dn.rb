@@ -6,7 +6,7 @@ cask "p1600dn" do
   # It builds the driver from the source archive, runs every test and installs
   # only when all of them pass.
   url "https://github.com/berkbb/p1600dn-macos-driver/archive/refs/tags/v#{version}.tar.gz"
-  name "HP LaserJet Professional P1600dn Series Driver"
+  name "P1600dn Series Driver"
   desc "Native Apple Silicon CUPS driver for HP LaserJet P1600dn series printers"
   homepage "https://github.com/berkbb/p1600dn-macos-driver"
 

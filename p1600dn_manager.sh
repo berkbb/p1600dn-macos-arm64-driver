@@ -1,6 +1,7 @@
 #!/bin/bash
 # ==============================================================================
-# HP LaserJet Professional P1600dn Series - Native ARM Driver Manager (macOS)
+# P1600dn Series - Native ARM Driver Manager (macOS), for HP LaserJet
+# Professional P1606dn, P1607dn, P1608dn and P1609dn printers
 # Central entry point for installation, maintenance, tests, and CUPS activation.
 # ==============================================================================
 
@@ -614,7 +615,7 @@ install_driver_steps() {
     [ -e "$INSTALL_DIR/rastertop1600dn" ] || [ -e "$INSTALLED_PPD" ] ||
         [ -e "$LEGACY_INSTALL_DIR/$LEGACY_FILTER_NAME" ] || [ -e "$LEGACY_PPD" ] || first_install=1
     echo "=========================================================="
-    echo " HP LaserJet Professional P1600dn Series - macOS ARM Kurucu"
+    echo " P1600dn Series - macOS ARM Kurucu / Installer"
     echo " (Desteklenenler / Supported: P1606dn, P1607dn, P1608dn, P1609dn)"
     echo "=========================================================="
     # Asked before the build: Gutenprint has no P1600dn driver. A reinstall or
@@ -1041,7 +1042,7 @@ help_menu() {
 
 print_cli_help() {
     cat <<EOF
-HP LaserJet Professional P1600dn Series (Native ARM64) Driver Manager
+P1600dn Series (Native ARM64) Driver Manager
 
 Kullanım / Usage:
   ./p1600dn_manager.command                  Etkileşimli ana menü / Interactive main menu
@@ -1148,7 +1149,7 @@ interactive_menu() {
     local choice queue_name
     while true; do
         clear_screen
-        printf '%b  HP LaserJet Professional P1600dn Serisi — Sürücü Yöneticisi / Driver Manager%b\n' "$BOLD" "$NC"
+        printf '%b  P1600dn Serisi — Sürücü Yöneticisi / Driver Manager%b\n' "$BOLD" "$NC"
         print_color "$CYAN" "  ──────────────────────────────────────────────────────────────────────────"
         printf '  %b[1]%b  %bKur / Install%b  (Derle + Test et / Build + Test)\n'                  "$BOLD" "$NC" "$GREEN"  "$NC"
         printf '  %b[2]%b  %bKaldır / Uninstall%b  (Native ARM64, Gutenprint & Eski Kalıntılar / Legacy Residue)\n' "$BOLD" "$NC" "$RED" "$NC"

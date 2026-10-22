@@ -140,7 +140,7 @@ int main(int argc, char *argv[]) {
     return papplMainloop(
         argc, argv,
         "6.0.0",
-        "HP LaserJet Professional P1600dn Series Printer Application",
+        "P1600dn Series Printer Application",
         (int)(sizeof(drivers)/sizeof(drivers[0]) - 1),
         drivers,
         p1600dn_driver_cb,
