@@ -159,7 +159,7 @@ OpenPrinting (The Linux Foundation) coordinates open-source CUPS and driver arch
 
 - The database is the GitHub repository [OpenPrinting/foomatic-db](https://github.com/OpenPrinting/foomatic-db); entries change through pull requests.
 - The P1606dn's printer entry is `db/source/printer/HP-LaserJet_Pro_P1606dn.xml`, linked to the Linux drivers `foo2zjs` and `foo2zjs-z2`. There are no entries for the P1607dn, P1608dn and P1609dn, and no driver entry is macOS-only.
-- Drafts in [`packaging/openprinting/`](packaging/openprinting/): the driver entry `p1600dn-macos.xml` (for `db/source/driver/`) and `ISSUE.md`, which asks the maintainers first whether a macOS-only driver entry is welcome. The pull request follows only if it is.
+- Drafts in [`packaging/openprinting/`](packaging/openprinting/): the driver entry `p1600dn-macos.xml` (for `db/source/driver/`) and `ISSUE.md`, which asks the maintainers first whether a macOS-only driver entry is welcome, posted as [foomatic-db#62](https://github.com/OpenPrinting/foomatic-db/issues/62). The pull request follows only if it is.
 
 ### 4.3 PAPPL (Printer Application) Future
 
@@ -179,5 +179,5 @@ OpenPrinting (The Linux Foundation) coordinates open-source CUPS and driver arch
 4a. [x] **Clean History:** One root commit of the 6.0.0 tree in a newly created repository (October 2026); no published commit holds third-party tables, strings or logos (section 1).
 5. [x] **Public Repository and Release:** `berkbb/p1600dn-macos-arm64-driver` is public (October 2026) with the tag and release `v6.0.1` (6.0.0 was withdrawn); no release assets were published.
 6. [x] **Homebrew Integration:** The 6.0.1 cask (`packaging/homebrew/`) is published in the public tap [berkbb/homebrew-tap](https://github.com/berkbb/homebrew-tap) with the SHA-256 of the `v6.0.1` source archive (`brew install --cask berkbb/tap/p1600dn`). A new release needs a new tag, the new version and SHA-256 in `packaging/homebrew/Casks/p1600dn.rb`, and the same file in the tap.
-7. [ ] **OpenPrinting Database:** Ask in `OpenPrinting/foomatic-db` whether a macOS-only driver entry is welcome (`packaging/openprinting/ISSUE.md`); if so, open the pull request with `packaging/openprinting/p1600dn-macos.xml`.
+7. [~] **OpenPrinting Database:** Asked in [OpenPrinting/foomatic-db#62](https://github.com/OpenPrinting/foomatic-db/issues/62) (October 2026) whether a macOS-only driver entry is welcome (`packaging/openprinting/ISSUE.md`); waiting for the maintainers. If it is, open the pull request with `packaging/openprinting/p1600dn-macos.xml`.
 8. [-] **PKG Build:** Not planned (October 2026); installation goes through the manager.

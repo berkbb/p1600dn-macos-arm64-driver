@@ -320,7 +320,7 @@ Installing or uninstalling the driver cleans up an old fallback installation. Qu
 
 The OpenPrinting PAPPL Printer Application adapter (`src/pappl_p1600dn.c`, `make pappl`, `./p1600dn_manager.command --build-pappl`) is an unfinished draft that cannot print: it registers no raster callbacks and, without libpappl, builds as a stub. It is kept for a future Linux Printer Application; when it is completed, its pages must go through the page check (`zjs_encode_page_checked()`) like every other path. `DISTRIBUTION_GUIDE.md` describes it.
 
-A driver entry for the OpenPrinting database (foomatic-db) is drafted in `packaging/openprinting/` and not submitted yet.
+A driver entry for the OpenPrinting database (foomatic-db) is drafted in `packaging/openprinting/`; the maintainers were asked in [foomatic-db#62](https://github.com/OpenPrinting/foomatic-db/issues/62) whether they want it.
 
 ---
 
