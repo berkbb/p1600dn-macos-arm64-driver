@@ -102,12 +102,25 @@ static void test_settings(void) {
     assert(strcmp(p1600_sides_keyword(P1600_SIDES_LONG_EDGE), "two-sided-long-edge") == 0);
     assert(strcmp(p1600_sides_keyword(P1600_SIDES_SHORT_EDGE), "two-sided-short-edge") == 0);
 
+    /* The resolution the page names and is printed at: the queue's option,
+     * else the PPD default cupsd reports (not in a destination's options). */
+    assert(strcmp(p1600_diagnostic_resolution(NULL, 600, 600), "600 dpi") == 0);
+    assert(strcmp(p1600_diagnostic_resolution(NULL, 1200, 600), "FastRes 1200") == 0);
+    assert(strcmp(p1600_diagnostic_resolution(NULL, 0, 0), "FastRes 1200") == 0);
+    assert(strcmp(p1600_diagnostic_resolution("600dpi", 1200, 600), "600 dpi") == 0);
+    assert(strcmp(p1600_diagnostic_resolution("1200x600dpi", 600, 600), "FastRes 1200") == 0);
+    p1600_diagnostic_defaults(&info, "en");
+    assert(strcmp(info.resolution, "FastRes 1200") == 0);
+    assert(strcmp(p1600_diagnostic_resolution_option(&info), "1200x600dpi") == 0);
+    snprintf(info.resolution, sizeof(info.resolution), "%s", p1600_diagnostic_resolution(NULL, 600, 600));
+    assert(strcmp(p1600_diagnostic_resolution_option(&info), "600dpi") == 0);
+
     char error[256];
     assert(p1600_diagnostic_info_for_queue("", &info, error, sizeof(error)) == -1);
     assert(p1600_diagnostic_info_for_queue("p1600dn-no-such-queue", &info, error, sizeof(error)) == -1);
     info.queue[0] = '\0';
     assert(p1600_diagnostic_print(&info, NULL, error, sizeof(error)) == -1 && strstr(error, "queue"));
-    printf("    [PASS] Diagnostic Page Settings (languages, 18 papers by name/PWG/size, sides, queue errors)\n");
+    printf("    [PASS] Diagnostic Page Settings (languages, 18 papers by name/PWG/size, sides, resolution, queue errors)\n");
 }
 
 static void test_pdfs(void) {
@@ -184,7 +197,8 @@ static void test_tool(const char *tool) {
 }
 
 /* The bottom edge test as rasterized: the last rows with a long black run
- * are the bar; below it, outside the corner-mark columns, only white. */
+ * are the bar; below it, in the bar's own columns, only white (the corner
+ * marks lie beside it). */
 static int check_raster(const char *path) {
     int fd = open(path, O_RDONLY);
     cups_raster_t *raster = fd >= 0 ? cupsRasterOpen(fd, CUPS_RASTER_READ) : NULL;
@@ -194,18 +208,29 @@ static int check_raster(const char *path) {
         return 1;
     }
     unsigned char *row = malloc(header.cupsBytesPerLine);
-    /* Corner marks reach 26 pt from each side edge; leave 40 pt. */
-    unsigned int margin = (unsigned int)(40.0 * header.HWResolution[0] / 72.0);
     long bar_end = -1, marks_below = 0;
+    unsigned int bar_left = 0, bar_right = 0;
     for (unsigned int y = 0; y < header.cupsHeight; y++) {
         if (cupsRasterReadPixels(raster, row, header.cupsBytesPerLine) != header.cupsBytesPerLine) return 1;
-        unsigned int dark = 0;
-        for (unsigned int x = margin; x + margin < header.cupsWidth; x++) dark += row[x] < 128;
-        if (dark > (header.cupsWidth - 2 * margin) * 9 / 10) {
+        /* The longest dark run of the row. */
+        unsigned int run_start = 0, best_start = 0, best_length = 0;
+        for (unsigned int x = 0; x <= header.cupsWidth; x++) {
+            if (x < header.cupsWidth && row[x] < 128) continue;
+            if (x > run_start && x - run_start > best_length) {
+                best_start = run_start;
+                best_length = x - run_start;
+            }
+            run_start = x + 1;
+        }
+        if (best_length > header.cupsWidth / 2) {
             bar_end = y;
+            bar_left = best_start;
+            bar_right = best_start + best_length;
             marks_below = 0;
-        } else if (bar_end >= 0 && dark > 0) {
-            marks_below++;
+        } else if (bar_end >= 0) {
+            unsigned int dark = 0;
+            for (unsigned int x = bar_left; x < bar_right; x++) dark += row[x] < 128;
+            if (dark > 0) marks_below++;
         }
     }
     free(row);

@@ -60,6 +60,16 @@ const char *p1600_sides_keyword(P1600Sides sides);
 /* Accepts the keywords and "one", "long", "short". Returns 0, or -1. */
 int p1600_sides_parse(const char *text, P1600Sides *sides);
 
+/* The resolution the page names and is printed at, "600 dpi" or "FastRes
+ * 1200": the queue's Resolution option (the user's lpoptions or the queue's
+ * own) when it has one, else the queue PPD's default as cupsd reports it
+ * (printer-resolution-default; 0 x 0 when unknown). */
+const char *p1600_diagnostic_resolution(const char *option, int default_x, int default_y);
+
+/* The PPD Resolution choice the page is printed with ("600dpi" or
+ * "1200x600dpi"), the one info->resolution names. */
+const char *p1600_diagnostic_resolution_option(const P1600DiagnosticInfo *info);
+
 /* Queue, printer, connection, default paper and resolution of a CUPS queue.
  * Returns 0, or -1 with a reason. */
 int p1600_diagnostic_info_for_queue(const char *queue, P1600DiagnosticInfo *info, char *error, size_t error_size);
@@ -68,7 +78,8 @@ int p1600_diagnostic_info_for_queue(const char *queue, P1600DiagnosticInfo *info
 int p1600_diagnostic_write_pdf(const char *path, const P1600DiagnosticInfo *info, char *error, size_t error_size);
 
 /* Writes the PDF to a private temporary file and prints it on info->queue
- * with info->sides. Returns 0 with the CUPS job id, or -1 with a reason. */
+ * with info->sides, its paper and its resolution. Returns 0 with the CUPS
+ * job id, or -1 with a reason. */
 int p1600_diagnostic_print(const P1600DiagnosticInfo *info, int *job_id, char *error, size_t error_size);
 
 #endif /* P1600_DIAGNOSTIC_H */

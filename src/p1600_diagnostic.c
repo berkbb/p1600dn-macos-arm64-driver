@@ -73,7 +73,7 @@ static const char *const english[T_COUNT] = {
         "Short-Edge: turn it over like a calendar; both arrows point to the same edge. "
         "1-Sided: page 2 is printed on a sheet of its own.",
     [T_SECTION_CHECK] = "Checklist",
-    [T_CHECK_1] = "No lines or marks below the black bar at the bottom of either side",
+    [T_CHECK_1] = "Nothing but the corner marks below the black bar at the bottom of either side",
     [T_CHECK_2] = "Every gray level can be told apart from its neighbours",
     [T_CHECK_3] = "The fine lines are unbroken and the small text is readable",
     [T_CHECK_4] = "All four corner marks are printed",
@@ -86,7 +86,7 @@ static const char *const english[T_COUNT] = {
         "by pixel. A page that fails the check is never printed.",
     [T_KEEP] = "If something is wrong, keep this sheet: it shows the problem.",
     [T_BOTTOM_TITLE] = "BOTTOM EDGE TEST",
-    [T_BOTTOM_TEXT] = "Nothing may be printed below the black bar, down to the edge of the paper.",
+    [T_BOTTOM_TEXT] = "Nothing but the corner marks may be printed below the black bar.",
     [T_CORNERS] = "The four corner marks show the printable area, 12 pt from each edge.",
     [T_USB] = "USB",
     [T_NETWORK] = "Network",
@@ -124,7 +124,7 @@ static const char *const turkish[T_COUNT] = {
         "Kısa kenar: kağıdı takvim gibi yukarı çevirin; iki ok da aynı kenarı göstermelidir. "
         "Tek taraflı: 2. sayfa ayrı bir kağıda basılır.",
     [T_SECTION_CHECK] = "Kontrol Listesi",
-    [T_CHECK_1] = "İki yüzde de alttaki siyah bandın altında çizgi veya iz yok",
+    [T_CHECK_1] = "İki yüzde de alttaki siyah bandın altında köşe işaretlerinden başka iz yok",
     [T_CHECK_2] = "Her gri ton yanındakinden ayırt edilebiliyor",
     [T_CHECK_3] = "İnce çizgiler kesintisiz, küçük yazılar okunuyor",
     [T_CHECK_4] = "Dört köşe işaretinin hepsi basılı",
@@ -137,7 +137,7 @@ static const char *const turkish[T_COUNT] = {
         "basılmaz.",
     [T_KEEP] = "Bir sorun varsa bu kağıdı saklayın: sorunu gösterir.",
     [T_BOTTOM_TITLE] = "ALT KENAR TESTİ",
-    [T_BOTTOM_TEXT] = "Siyah bandın altında, kağıdın kenarına kadar hiçbir şey basılmamalıdır.",
+    [T_BOTTOM_TEXT] = "Siyah bandın altında köşe işaretlerinden başka hiçbir şey basılmamalıdır.",
     [T_CORNERS] = "Dört köşe işareti, her kenardan 12 pt içeride yazdırılabilir alanı gösterir.",
     [T_USB] = "USB",
     [T_NETWORK] = "Ağ",
@@ -277,6 +277,15 @@ static void connection_label(P1600DiagnosticInfo *info, const char *device_uri) 
     snprintf(info->connection, sizeof(info->connection), "%s: %s", text(info, T_NETWORK), host);
 }
 
+const char *p1600_diagnostic_resolution(const char *option, int default_x, int default_y) {
+    if (option) return strcmp(option, "600dpi") == 0 ? "600 dpi" : "FastRes 1200";
+    return default_x == 600 && default_y == 600 ? "600 dpi" : "FastRes 1200";
+}
+
+const char *p1600_diagnostic_resolution_option(const P1600DiagnosticInfo *info) {
+    return info && strcmp(info->resolution, "600 dpi") == 0 ? "600dpi" : "1200x600dpi";
+}
+
 int p1600_diagnostic_info_for_queue(const char *queue, P1600DiagnosticInfo *info, char *error, size_t error_size) {
     if (!queue || !*queue || !info) return fail(error, error_size, "No printer queue");
     P1600Queue found;
@@ -287,9 +296,19 @@ int p1600_diagnostic_info_for_queue(const char *queue, P1600DiagnosticInfo *info
 
     cups_dest_t *dest = cupsGetNamedDest(CUPS_HTTP_DEFAULT, found.name, NULL);
     if (!dest) return 0;
-    const char *resolution = cupsGetOption("Resolution", dest->num_options, dest->options);
-    if (resolution && strcmp(resolution, "600dpi") == 0) copy(info->resolution, sizeof(info->resolution), "600 dpi");
     cups_dinfo_t *dinfo = cupsCopyDestInfo(CUPS_HTTP_DEFAULT, dest);
+    /* A destination's options carry lpoptions and printers.conf settings,
+     * never the PPD's defaults: those come as printer-resolution-default. */
+    int default_x = 0, default_y = 0;
+    ipp_attribute_t *resolution =
+        dinfo ? cupsFindDestDefault(CUPS_HTTP_DEFAULT, dest, dinfo, "printer-resolution") : NULL;
+    if (resolution) {
+        ipp_res_t units = IPP_RES_PER_INCH;
+        default_x = ippGetResolution(resolution, 0, &default_y, &units);
+        if (units != IPP_RES_PER_INCH) default_x = default_y = 0;
+    }
+    copy(info->resolution, sizeof(info->resolution),
+         p1600_diagnostic_resolution(cupsGetOption("Resolution", dest->num_options, dest->options), default_x, default_y));
     cups_size_t size;
     if (dinfo && cupsGetDestMediaDefault(CUPS_HTTP_DEFAULT, dest, dinfo, 0, &size)) {
         if (p1600_diagnostic_set_paper(info, size.media) != 0) {
@@ -537,8 +556,9 @@ static void edges(CGContextRef c, const P1600DiagnosticInfo *info) {
     line(c, w - e, h - e, w - e, h - e - arm, 0.75);
 
     /* The black bar is the last thing printed; below it there must be
-     * white paper down to the edge. */
-    const double left = e + 8, right = w - e - 8;
+     * white paper down to the edge. It ends clear of the bottom corner
+     * marks, so nothing but white is under it. */
+    const double left = e + arm + 6, right = w - e - arm - 6;
     CGContextSetGrayFillColor(c, 0.0, 1.0);
     CGContextFillRect(c, CGRectMake(left, 24, right - left, 10));
     double size = 8;
@@ -621,6 +641,9 @@ int p1600_diagnostic_print(const P1600DiagnosticInfo *info, int *job_id, char *e
         cups_option_t *options = NULL;
         int count = cupsAddOption("sides", p1600_sides_keyword(info->sides), 0, &options);
         count = cupsAddOption("PageSize", info->paper, count, &options);
+        /* Printed at the resolution it names: cupsPrintFile2() adds no
+         * lpoptions, so the queue's default would apply otherwise. */
+        count = cupsAddOption("Resolution", p1600_diagnostic_resolution_option(info), count, &options);
         int job = cupsPrintFile2(CUPS_HTTP_DEFAULT, info->queue, path, text(info, T_TITLE), count, options);
         cupsFreeOptions(count, options);
         if (job <= 0) {
