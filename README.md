@@ -318,7 +318,9 @@ Earlier versions could also install the OpenPrinting `foo2zjs` encoder as a fall
 
 Installing or uninstalling the driver cleans up an old fallback installation. Queues that still use its PPD are switched to the native driver; their names and connections stay the same.
 
-The OpenPrinting PAPPL Printer Application adapter (`src/pappl_p1600dn.c`, `make pappl`, `./p1600dn_manager.command --build-pappl`) is an unfinished draft that cannot print: it registers no raster callbacks and, without libpappl, builds as a stub. It is kept for a future submission to OpenPrinting; when it is completed, its pages must go through the page check (`zjs_encode_page_checked()`) like every other path. `DISTRIBUTION_GUIDE.md` describes it.
+The OpenPrinting PAPPL Printer Application adapter (`src/pappl_p1600dn.c`, `make pappl`, `./p1600dn_manager.command --build-pappl`) is an unfinished draft that cannot print: it registers no raster callbacks and, without libpappl, builds as a stub. It is kept for a future Linux Printer Application; when it is completed, its pages must go through the page check (`zjs_encode_page_checked()`) like every other path. `DISTRIBUTION_GUIDE.md` describes it.
+
+A driver entry for the OpenPrinting database (foomatic-db) is drafted in `packaging/openprinting/` and not submitted yet.
 
 ---
 
@@ -347,6 +349,7 @@ Its package receipts are forgotten and its driver, filters, PPDs and tools are d
 p1600dn-macos-arm64-driver/
 ├── assets/                               Printer icon for the PPD and AirPrint (.icns, .png), app icon (.icns)
 ├── build/                                Output build artifacts (object files, binaries)
+├── packaging/                            Homebrew cask (homebrew/) and OpenPrinting database drafts (openprinting/)
 ├── ppd/
 │   └── P1600dn-Series.ppd       Bilingual P1600dn Series PPD
 ├── reference/zjstream/                   ZjStream job specification of the P1600dn series

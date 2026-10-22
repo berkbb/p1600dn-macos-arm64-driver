@@ -152,16 +152,14 @@ OpenPrinting (The Linux Foundation) coordinates open-source CUPS and driver arch
 
 ### 4.1 Relationship to macOS
 
-- macOS printing has been built on the **CUPS** standard since 2002.
-- Apple officially transitioned open-source CUPS project leadership to **OpenPrinting (The Linux Foundation)** in 2020.
-- Consequently, this native driver is 100% compliant with both macOS CUPS and OpenPrinting standards.
+- macOS printing has been built on **CUPS** since 2002, and Apple handed CUPS development to **OpenPrinting** in 2020. This driver is an ordinary CUPS raster filter with a PPD.
+- OpenPrinting itself targets Linux and other free systems; its printer database and Printer Applications are built for them. This driver runs on macOS only (IOKit, CoreGraphics, Swift apps), so it is not a Linux driver.
 
-### 4.2 OpenPrinting Registry (`openprinting.org`)
+### 4.2 OpenPrinting Database (`foomatic-db`)
 
-- On the official P1606dn printer registry page (`openprinting.org/printer/HP/HP-LaserJet_Professional_P1606dn`):
-  - Current status: Lists legacy Linux `foo2zjs`, with Apple Silicon native support unlisted.
-  - Registration target: Add `berkbb/p1600dn-macos-arm64-driver` under **"Recommended macOS Apple Silicon (ARM64) Driver"**.
-- **Submission:** Submit an entry/notification to OpenPrinting curators (Till Kamppeter and team) via Foomatic/Driver XML or GitHub issue.
+- The database is the GitHub repository [OpenPrinting/foomatic-db](https://github.com/OpenPrinting/foomatic-db); entries change through pull requests.
+- The P1606dn's printer entry is `db/source/printer/HP-LaserJet_Pro_P1606dn.xml`, linked to the Linux drivers `foo2zjs` and `foo2zjs-z2`. There are no entries for the P1607dn, P1608dn and P1609dn, and no driver entry is macOS-only.
+- Drafts in [`packaging/openprinting/`](packaging/openprinting/): the driver entry `p1600dn-macos.xml` (for `db/source/driver/`) and `ISSUE.md`, which asks the maintainers first whether a macOS-only driver entry is welcome. The pull request follows only if it is.
 
 ### 4.3 PAPPL (Printer Application) Future
 
@@ -181,5 +179,5 @@ OpenPrinting (The Linux Foundation) coordinates open-source CUPS and driver arch
 4a. [x] **Clean History:** One root commit of the 6.0.0 tree in a newly created repository (October 2026); no published commit holds third-party tables, strings or logos (section 1).
 5. [x] **Public Repository and Release:** `berkbb/p1600dn-macos-arm64-driver` is public (October 2026) with the tag and release `v6.0.1` (6.0.0 was withdrawn); no release assets were published.
 6. [x] **Homebrew Integration:** The 6.0.1 cask (`packaging/homebrew/`) is published in the public tap [berkbb/homebrew-tap](https://github.com/berkbb/homebrew-tap) with the SHA-256 of the `v6.0.1` source archive (`brew install --cask berkbb/tap/p1600dn`). A new release needs a new tag, the new version and SHA-256 in `packaging/homebrew/Casks/p1600dn.rb`, and the same file in the tap.
-7. [ ] **OpenPrinting Registry:** Submit entry to OpenPrinting database as the native macOS ARM64 driver.
+7. [ ] **OpenPrinting Database:** Ask in `OpenPrinting/foomatic-db` whether a macOS-only driver entry is welcome (`packaging/openprinting/ISSUE.md`); if so, open the pull request with `packaging/openprinting/p1600dn-macos.xml`.
 8. [-] **PKG Build:** Not planned (October 2026); installation goes through the manager.
