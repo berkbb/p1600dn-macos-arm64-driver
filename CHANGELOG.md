@@ -22,7 +22,7 @@ The first published release: a native Apple Silicon (arm64) CUPS driver for macO
 - **AirPrint and IPP Everywhere** server, off until turned on, that prints through the CUPS queue.
 - **16 languages** in the PPD, the utility and the notifier: English, Danish, German, Spanish, Finnish, French, Italian, Korean, Dutch, Norwegian, Swedish, Portuguese, Simplified and Traditional Chinese, Turkish and Romanian.
 - **Manager** `p1600dn_manager.command` (and `.sh`): builds the driver, runs every test, installs only when all pass, adds and updates queues, turns AirPrint on and off, removes Gutenprint, and uninstalls.
-- **Homebrew cask** `p1600dn` in the tap [berkbb/homebrew-tap](https://github.com/berkbb/homebrew-tap) (source: `packaging/homebrew/`), which installs through the manager: `brew install --cask berkbb/tap/p1600dn`.
+- **Homebrew cask** `p1600dn` in the tap [berkbb/homebrew-tap](https://github.com/berkbb/homebrew-tap) (source: `packaging/homebrew/`), which installs through the manager: `brew tap berkbb/tap`, then `brew install --cask berkbb/tap/p1600dn` (`brew trust berkbb/tap` lets `brew search` find it and the short name `p1600dn` work).
 - Own printer icon (`assets/P1600dnPrinter.icns`, `.png`) and app icon (`assets/P1600dnApp.icns`), drawn by `tools/draw_printer_icon.swift`.
 - The job specification (`reference/zjstream/ZJS_STREAM_SPEC.md`) and a trademark notice (`README.md`, `NOTICE`).
 

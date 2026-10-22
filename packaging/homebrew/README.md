@@ -17,16 +17,16 @@ Requirements:
 
 ## Installation
 
-### Single-line direct installation:
-
 ```bash
+brew tap berkbb/tap
 brew install --cask berkbb/tap/p1600dn
 ```
 
-### Or by adding the tap first:
+Homebrew 7 treats taps outside Homebrew as untrusted: `brew install` takes the full name `berkbb/tap/p1600dn` once the tap is added. To find the cask with `brew search p1600dn` and use the short name `p1600dn`, trust the tap once with `brew trust berkbb/tap`.
 
 ```bash
-brew tap berkbb/tap
+brew trust berkbb/tap
+brew search p1600dn
 brew install --cask p1600dn
 ```
 
@@ -37,7 +37,7 @@ brew install --cask p1600dn
 To remove the driver completely:
 
 ```bash
-brew uninstall --cask p1600dn
+brew uninstall --cask berkbb/tap/p1600dn
 ```
 
 This runs `p1600dn_manager.command --uninstall --yes`. It removes the driver, the utility, the notifier, AirPrint and the PPD. It also removes Gutenprint, unless another printer still uses it. Print queues stay; remove them in Printers & Scanners.

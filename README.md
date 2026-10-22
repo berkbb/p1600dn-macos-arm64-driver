@@ -121,10 +121,13 @@ The real macOS `cgtexttopdf` -> `cgpdftoraster` pipeline is executed across simp
 ### Homebrew
 
 ```bash
+brew tap berkbb/tap
 brew install --cask berkbb/tap/p1600dn
 ```
 
-The cask lives in the tap repository [berkbb/homebrew-tap](https://github.com/berkbb/homebrew-tap) (`Casks/p1600dn.rb`; its source is `packaging/homebrew/` here). It downloads this repository's latest release, checks its SHA-256, and runs `p1600dn_manager.command --install`, so the driver is built and tested on your Mac first. `brew uninstall --cask p1600dn` runs `--uninstall --yes`.
+Homebrew 7 treats taps outside Homebrew as untrusted: `brew install` takes the full name `berkbb/tap/p1600dn` once the tap is added. To find the cask with `brew search p1600dn` and use the short name `p1600dn`, trust the tap once with `brew trust berkbb/tap`.
+
+The cask lives in the tap repository [berkbb/homebrew-tap](https://github.com/berkbb/homebrew-tap) (`Casks/p1600dn.rb`; its source is `packaging/homebrew/` here). It downloads this repository's latest release, checks its SHA-256, and runs `p1600dn_manager.command --install`, so the driver is built and tested on your Mac first. `brew uninstall --cask berkbb/tap/p1600dn` runs `--uninstall --yes`.
 
 ### Manager
 

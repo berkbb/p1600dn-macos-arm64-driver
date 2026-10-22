@@ -126,21 +126,22 @@ Included tap assets in this repository:
    _(Homebrew naming convention requires `homebrew-<name>`; `homebrew-tap` enables the clean `berkbb/tap` shorthand)._
 2. Upload the files from `packaging/homebrew/` to that repository (`Casks/p1600dn.rb`).
 3. Make `berkbb/p1600dn-macos-arm64-driver` public with the tag `v6.0.1` (check section 1 first), and put the SHA-256 of `https://github.com/berkbb/p1600dn-macos-arm64-driver/archive/refs/tags/v6.0.1.tar.gz` into the cask in place of `:no_check`.
-4. Users anywhere can now install the driver with a single command:
+4. Users add the tap and install the cask by its full name:
    ```bash
+   brew tap berkbb/tap
    brew install --cask berkbb/tap/p1600dn
    ```
-   _(Homebrew automatically fetches the tap and installs the cask in one seamless step!)_
+   _(Homebrew 7 treats taps outside Homebrew as untrusted: without `brew tap` first, the install is refused, and `brew search p1600dn` and the short name `p1600dn` work only after `brew trust berkbb/tap`.)_
 
 #### Upgrading & Uninstalling:
 
 - When a new version is released:
   ```bash
-  brew upgrade --cask p1600dn
+  brew upgrade --cask berkbb/tap/p1600dn
   ```
 - To remove the driver completely:
   ```bash
-  brew uninstall --cask p1600dn
+  brew uninstall --cask berkbb/tap/p1600dn
   ```
   This runs the manager's uninstall: driver, utility, notifier, AirPrint, PPD and Gutenprint (unless another printer uses it). Print queues stay.
 
@@ -178,6 +179,6 @@ OpenPrinting (The Linux Foundation) coordinates open-source CUPS and driver arch
 4. [x] **Own Data:** The current tree has its own screens, tone curves and texts (section 1). The new screens still need a test print (item 3).
 4a. [x] **Clean History:** One root commit of the 6.0.0 tree in a newly created repository (October 2026); no published commit holds third-party tables, strings or logos (section 1).
 5. [x] **Public Repository and Release:** `berkbb/p1600dn-macos-arm64-driver` is public (October 2026) with the tag and release `v6.0.1` (6.0.0 was withdrawn); no release assets were published.
-6. [x] **Homebrew Integration:** The 6.0.1 cask (`packaging/homebrew/`) is published in the public tap [berkbb/homebrew-tap](https://github.com/berkbb/homebrew-tap) with the SHA-256 of the `v6.0.1` source archive (`brew install --cask berkbb/tap/p1600dn`). A new release needs a new tag, the new version and SHA-256 in `packaging/homebrew/Casks/p1600dn.rb`, and the same file in the tap.
+6. [x] **Homebrew Integration:** The 6.0.1 cask (`packaging/homebrew/`) is published in the public tap [berkbb/homebrew-tap](https://github.com/berkbb/homebrew-tap) with the SHA-256 of the `v6.0.1` source archive (`brew tap berkbb/tap`, then `brew install --cask berkbb/tap/p1600dn`; `brew trust berkbb/tap` for `brew search` and the short name). A new release needs a new tag, the new version and SHA-256 in `packaging/homebrew/Casks/p1600dn.rb`, and the same file in the tap.
 7. [~] **OpenPrinting Database:** Asked in [OpenPrinting/foomatic-db#62](https://github.com/OpenPrinting/foomatic-db/issues/62) (October 2026) whether a macOS-only driver entry is welcome (`packaging/openprinting/ISSUE.md`); waiting for the maintainers. If it is, open the pull request with `packaging/openprinting/p1600dn-macos.xml`.
 8. [-] **PKG Build:** Not planned (October 2026); installation goes through the manager.

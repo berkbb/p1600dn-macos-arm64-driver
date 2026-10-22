@@ -38,8 +38,8 @@
 
       &lt;p&gt;
 
-      Install it with Homebrew (brew install --cask berkbb/tap/p1600dn)
-      or from source; it is built and tested on the Mac before it is
+      Install it with Homebrew (brew tap berkbb/tap, then brew install
+      --cask berkbb/tap/p1600dn) or from source; it is built and tested on the Mac before it is
       installed.
 
     </en>
