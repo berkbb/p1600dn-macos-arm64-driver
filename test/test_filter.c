@@ -2,14 +2,15 @@
  * End-to-end smoke tests for the rastertop1600dn CUPS filter (argv[1]):
  * one 8-bit gray page through to the exact PJL/ZjStream job, the 600 dpi and
  * legacy 1200x600 formats, solid page screening, empty/truncated/corrupt
- * input, header rejections, paper codes, automatic and manual duplex order,
- * and argument errors.  test_filter_modes.c holds the exhaustive matrix.
+ * input, a canceled job, header rejections, paper codes, automatic and
+ * manual duplex order, and argument errors.  test_filter_modes.c holds the exhaustive matrix.
  *
  * Usage: test_filter <filter>
  */
 #include <assert.h>
 #include <cups/raster.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -562,6 +563,96 @@ static void test_failed_job_closed(const char *filter) {
     printf("    [PASS] Failed Job Closed at a Page Boundary (simplex, automatic and manual duplex)\n");
 }
 
+/* Canceling a job: cupsd sends SIGTERM and stops the filter before this one,
+ * so the raster input ends in the middle of a page. The job is closed after
+ * the last whole page (END_DOC and the job trailer, no part of a page,
+ * no ERROR) instead of dying mid-page. Automatic duplex holds page 1 for its
+ * back side, so nothing of that sheet is sent. */
+static void test_canceled_job_closed(const char *filter) {
+    static const struct {
+        unsigned int duplex;
+        size_t pages_sent;
+    } cases[] = {{0, 1}, {1, 0}};
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        RasterPage pages[2];
+        for (unsigned int i = 0; i < 2U; i++) {
+            pages[i] = gray_page(64, 24);
+            pages[i].duplex = cases[c].duplex;
+            pages[i].fill = FILL_NOISE;
+            pages[i].seed = i + 1U;
+        }
+        char *raster_path = temp_path("raster");
+        write_raster(raster_path, pages, 2);
+        Blob raster = read_path(raster_path);
+        remove_path(raster_path);
+        const size_t page_bytes = sizeof(cups_page_header2_t) + 64U * 24U;
+        assert(raster.len == 4U + 2U * page_bytes);
+        /* Page 1 whole, then page 2's header and half of its lines. */
+        const size_t sent = 4U + page_bytes + sizeof(cups_page_header2_t) + 64U * 12U;
+
+        char *output_path = temp_path("zjs");
+        char *diagnostics_path = temp_path("diagnostics");
+        int input[2];
+        assert(pipe(input) == 0);
+        fflush(stdout);
+        pid_t pid = fork();
+        assert(pid >= 0);
+        if (pid == 0) {
+            int out_fd = open(output_path, O_WRONLY | O_TRUNC);
+            int err_fd = open(diagnostics_path, O_WRONLY | O_TRUNC);
+            if (out_fd < 0 || err_fd < 0 || dup2(out_fd, STDOUT_FILENO) < 0 ||
+                dup2(err_fd, STDERR_FILENO) < 0 || dup2(input[0], STDIN_FILENO) < 0 || unsetenv("PPD") != 0) {
+                _exit(126);
+            }
+            close(out_fd);
+            close(err_fd);
+            close(input[0]);
+            close(input[1]);
+            alarm(120);
+            execl(filter, filter, "1", "test-user", TITLE, "1", "", (char *)NULL);
+            _exit(127);
+        }
+        close(input[0]);
+        assert(write(input[1], raster.data, sent) == (ssize_t)sent);
+        /* Page 1 is rendered (its PAGE: line); the filter waits for page 2. */
+        int rendered = 0;
+        for (int tries = 0; tries < 6000 && !rendered; tries++) {
+            Blob diagnostics = read_path(diagnostics_path);
+            rendered = contains(&diagnostics, "PAGE: 1 ");
+            free(diagnostics.data);
+            if (!rendered) usleep(10000);
+        }
+        assert(rendered);
+        assert(kill(pid, SIGTERM) == 0);
+        usleep(200000);
+        close(input[1]);  /* cupsd stopped the filter before this one */
+        int status = 0;
+        assert(waitpid(pid, &status, 0) == pid);
+        FilterResult result = {
+            .status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status),
+            .output = read_path(output_path),
+            .diagnostics = read_path(diagnostics_path),
+        };
+        remove_path(output_path);
+        remove_path(diagnostics_path);
+        if (result.status > 1 || contains(&result.diagnostics, "ERROR:") ||
+            !contains(&result.diagnostics, "Job canceled") || contains(&result.diagnostics, "Sanitizer") ||
+            contains(&result.diagnostics, "runtime error")) {
+            fprintf(stderr, "canceled filter status %d:\n%.*s\n", result.status, (int)result.diagnostics.len,
+                    (const char *)result.diagnostics.data);
+            assert(0 && "the canceled job was not closed");
+        }
+        ZjsJob job;
+        parse_job(&result.output, &job);
+        assert(job.page_count <= cases[c].pages_sent && job.pause_after < 0);
+        for (size_t i = 0; i < job.page_count; i++) assert(job.pages[i].video_y == 24U);
+        free_job(&job);
+        free_result(&result);
+        free(raster.data);
+    }
+    printf("    [PASS] Canceled Job (SIGTERM) Closed at a Page Boundary (simplex, automatic duplex)\n");
+}
+
 static void test_header_rejections(const char *filter) {
     static const unsigned int models[] = {0, 1010};
     for (size_t i = 0; i < 2U; i++) {
@@ -763,6 +854,7 @@ int main(int argc, char **argv) {
     test_duplex(argv[1]);
     test_empty_and_truncated(argv[1]);
     test_failed_job_closed(argv[1]);
+    test_canceled_job_closed(argv[1]);
     test_header_rejections(argv[1]);
     test_duplex_change(argv[1]);
     test_arguments(argv[1]);

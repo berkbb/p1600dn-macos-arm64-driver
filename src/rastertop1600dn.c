@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -91,24 +92,50 @@ static uint32_t legacy_source_code(const char *name) {
     return DMBIN_AUTO;
 }
 
-/* Installable options live in the queue's PPD, not in the job options. */
-static bool ppd_default_dup_unit(void) {
+/* The queue's own settings (installable options, and options set with
+ * lpadmin -o or in the printer's settings) live in its PPD as
+ * *Default<keyword>; cupsd does not repeat them in the job options, so the
+ * filter reads them from the PPD itself. */
+#define PPD_VALUE_SIZE 32
+
+static bool ppd_default(const char *keyword, char value[PPD_VALUE_SIZE]) {
     const char *path = getenv("PPD");
     FILE *ppd = path ? fopen(path, "r") : NULL;
-    if (!ppd) return true;
+    if (!ppd) return false;
 
-    bool installed = true;
+    char prefix[64];
+    int prefix_length = snprintf(prefix, sizeof(prefix), "*Default%s:", keyword);
+    bool found = false;
     char line[256];
-    while (fgets(line, sizeof(line), ppd)) {
-        static const char keyword[] = "*DefaultDupUnit:";
-        if (strncmp(line, keyword, sizeof(keyword) - 1U) == 0) {
-            char value[32] = "";
-            if (sscanf(line + sizeof(keyword) - 1U, " %31s", value) == 1) installed = !is_false(value);
-            break;
+    while (!found && prefix_length > 0 && (size_t)prefix_length < sizeof(prefix) && fgets(line, sizeof(line), ppd)) {
+        if (strncmp(line, prefix, (size_t)prefix_length) == 0) {
+            found = sscanf(line + prefix_length, " %31s", value) == 1;
+            if (!found) break;
         }
     }
     fclose(ppd);
-    return installed;
+    return found;
+}
+
+/* The job option under any of its names, else the queue PPD's default for
+ * the first name (the PPD's keyword). */
+static const char *option_or_default(const char *const *names, int num_options, cups_option_t *options,
+                                     char value[PPD_VALUE_SIZE]) {
+    const char *option = first_option(names, num_options, options);
+    if (option) return option;
+    return ppd_default(names[0], value) ? value : NULL;
+}
+
+/* cupsd sends SIGTERM when the job is canceled, and stops the filters before
+ * this one too, so the raster input ends. The job then stops at a page
+ * boundary and is closed like a failed one (END_DOC, EOJ, USTATUSOFF): the
+ * printer never gets part of a page and is ready again at once. SA_RESTART
+ * keeps the page being written whole. */
+static atomic_bool job_canceled;
+
+static void cancel_job(int signal_number) {
+    (void)signal_number;
+    atomic_store(&job_canceled, true);
 }
 
 /* Manual duplex jobs are spooled and replayed in sheet order. */
@@ -279,7 +306,7 @@ static bool write_next_page(PageWriter *writer) {
     size_t length = 0;
     int result = p1600_encoder_pool_next(writer->pool, &data, &length);
     if (result == 0) return false;
-    if (atomic_load(&writer->failed)) {
+    if (atomic_load(&writer->failed) || atomic_load(&job_canceled)) {
         free(data);
     } else if (result < 0) {
         fprintf(stderr, "ERROR: Page %d was not sent to the printer: %s\n", writer->sink->count + 1,
@@ -338,6 +365,9 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "ERROR: Standard output is not available for the print job\n");
         return 1;
     }
+    struct sigaction cancel = {.sa_handler = cancel_job, .sa_flags = SA_RESTART};
+    sigemptyset(&cancel.sa_mask);
+    sigaction(SIGTERM, &cancel, NULL);
 
     int legacy_copies = 1;
     if (parse_int_range(argv[4], 1, INT_MAX, &legacy_copies) != 0) {
@@ -360,15 +390,17 @@ int main(int argc, char *argv[]) {
     static const char *const source_names[] = {"InputSlot", "MediaSource", NULL};
 
     ZjsJobOptions job = {.job_name = argv[3], .density = 3};
+    char ppd_value[PPD_VALUE_SIZE];
     int density = 0;
-    if (parse_int_range(first_option(density_names, num_options, options), 1, 5, &density) == 0) {
+    if (parse_int_range(option_or_default(density_names, num_options, options, ppd_value), 1, 5, &density) == 0) {
         job.density = density;
     }
-    job.jam_recovery = is_true(first_option(jam_names, num_options, options));
-    bool econo_mode = is_true(first_option(econo_names, num_options, options));
-    bool reverse_corner = is_true(first_option(rotate_names, num_options, options));
-    const char *dup_unit = cupsGetOption("DupUnit", num_options, options);
-    bool dup_unit_installed = dup_unit ? !is_false(dup_unit) : ppd_default_dup_unit();
+    job.jam_recovery = is_true(option_or_default(jam_names, num_options, options, ppd_value));
+    bool econo_mode = is_true(option_or_default(econo_names, num_options, options, ppd_value));
+    bool reverse_corner = is_true(option_or_default(rotate_names, num_options, options, ppd_value));
+    static const char *const dup_unit_names[] = {"DupUnit", NULL};
+    const char *dup_unit = option_or_default(dup_unit_names, num_options, options, ppd_value);
+    bool dup_unit_installed = !dup_unit || !is_false(dup_unit);
     const char *media_name = first_option(media_names, num_options, options);
     const char *source_name = first_option(source_names, num_options, options);
 
@@ -407,7 +439,7 @@ int main(int argc, char *argv[]) {
     int page_number = 0;
     int status = 0;
 
-    while (status == 0 && cupsRasterReadHeader2(raster, &header)) {
+    while (status == 0 && !atomic_load(&job_canceled) && cupsRasterReadHeader2(raster, &header)) {
         int next_page = page_number + 1;
         P1600PageGeometry geometry;
         char reason[160];
@@ -493,9 +525,14 @@ int main(int argc, char *argv[]) {
         }
         ProgressContext progress = {.texts = &texts, .page = next_page};
         if (p1600_render_page_progress(raster, &header, &geometry, rotate, bitmap, report_progress, &progress) != 0) {
-            fprintf(stderr, "ERROR: Truncated raster data on page %d\n", next_page);
+            /* A canceled job's input ends where cupsd stopped the filter before. */
+            if (!atomic_load(&job_canceled)) fprintf(stderr, "ERROR: Truncated raster data on page %d\n", next_page);
             free(bitmap);
             status = 1;
+            break;
+        }
+        if (atomic_load(&job_canceled)) {
+            free(bitmap);
             break;
         }
 
@@ -510,8 +547,13 @@ int main(int argc, char *argv[]) {
         if (!writer.running) write_next_page(&writer);
         last_page = page;
     }
+    bool canceled = atomic_load(&job_canceled);
+    if (canceled) {
+        fputs("DEBUG: Job canceled; closing the print job after the last whole page\n", stderr);
+        status = 1;
+    }
     if (pool) {
-        /* After an error the remaining pages are dropped, not printed. */
+        /* After an error or a cancel the remaining pages are dropped, not printed. */
         if (status != 0) atomic_store(&writer.failed, true);
         p1600_encoder_pool_close(pool);
         if (writer.running) pthread_join(writer.thread, NULL);

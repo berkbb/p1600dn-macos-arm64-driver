@@ -1754,6 +1754,72 @@ static void test_automatic_duplex_eligibility(const char *filter) {
     printf("    [PASS] Automatic Duplex Paper/Media Eligibility and DupUnit Option/PPD Matrix (%u jobs)\n", jobs);
 }
 
+/* The queue's settings in its PPD (*Default<keyword>: what lpadmin -o and
+ * the printer's settings change; cupsd does not repeat them in the job
+ * options) apply when the job does not name the option; the job wins. */
+static void test_ppd_defaults_matrix(const char *filter) {
+    char *ppds[] = {
+        write_ppd("*PPD-Adobe: \"4.3\"\n*DefaultpjlDensity: 5\n*DefaultpjlJamRecovery: True\n"
+                  "*DefaultTersKose: True\n*DefaultEconoMode: True\n"),
+        write_ppd("*PPD-Adobe: \"4.3\"\n*DefaultpjlDensity: 3\n*DefaultpjlJamRecovery: False\n"
+                  "*DefaultTersKose: False\n*DefaultEconoMode: False\n"),
+        write_ppd("*PPD-Adobe: \"4.3\"\n*DefaultpjlDensity:  2\n"),
+        write_ppd("*PPD-Adobe: \"4.3\"\n*DefaultpjlDensity: 9\n*DefaultEconoMode:\n*DefaultTersKose: Maybe\n"),
+    };
+    enum { PPD_SET, PPD_PLAIN, PPD_DENSITY, PPD_BAD, PPD_NONE };
+    static const struct {
+        const char *options;
+        int ppd;
+        int density;
+        int jam;
+        uint32_t econo;
+        int rotated;
+    } cases[] = {
+        {"", PPD_SET, 5, 1, 1, 1},
+        {"", PPD_PLAIN, 3, 0, 0, 0},
+        {"", PPD_DENSITY, 2, 0, 0, 0},
+        {"", PPD_BAD, 3, 0, 0, 0},
+        {"", PPD_NONE, 3, 0, 0, 0},
+        {"pjlDensity=1 pjlJamRecovery=False TersKose=False EconoMode=False", PPD_SET, 1, 0, 0, 0},
+        {"PrintDensity=4 JamRecovery=Off ReverseLandscape=Off TonerSave=Off", PPD_SET, 4, 0, 0, 0},
+        {"EconoMode=True TersKose=True", PPD_PLAIN, 3, 0, 1, 1},
+        {"pjlDensity=4", PPD_DENSITY, 4, 0, 0, 0},
+    };
+    RasterPage page = gray_page(45, 29);
+    page.fill = FILL_NOISE;
+    page.seed = 21;
+    RasterPage turned = page;
+    turned.rotated = 1;
+    char pjl[512];
+    unsigned int jobs = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        RunOptions run = run_defaults();
+        run.options = cases[i].options;
+        run.ppd = cases[i].ppd == PPD_NONE ? NULL : ppds[cases[i].ppd];
+        FilterResult result = run_pages(filter, &page, 1, &run);
+        expected_pjl(pjl, sizeof(pjl), DEFAULT_TITLE, cases[i].density, cases[i].jam);
+        ZjsJob job;
+        expect_job(&result, pjl, &job);
+        assert(job.page_count == 1U && job.pages[0].econo == cases[i].econo);
+        /* The page itself: turned 180 degrees when TersKose applies. */
+        RunOptions reference_run = run_defaults();
+        reference_run.options = cases[i].econo ? "EconoMode=True" : "";
+        FilterResult reference = run_pages(filter, cases[i].rotated ? &turned : &page, 1, &reference_run);
+        ZjsJob reference_job;
+        expect_job(&reference, NULL, &reference_job);
+        assert(reference_job.page_count == 1U);
+        assert(same_page_bytes(&result.output, &job.pages[0], &reference.output, &reference_job.pages[0]));
+        free_job(&reference_job);
+        free_result(&reference);
+        free_job(&job);
+        free_result(&result);
+        jobs += 2U;
+    }
+    for (size_t i = 0; i < sizeof(ppds) / sizeof(ppds[0]); i++) remove_path(ppds[i]);
+    printf("    [PASS] Queue PPD Defaults for Density, Jam Recovery, EconoMode and TersKose; Job Options Win (%u jobs)\n",
+           jobs);
+}
+
 static void test_duplex_transition_matrix(const char *filter) {
     static const unsigned int states[][2] = {{0, 0}, {0, 1}, {1, 0}, {1, 1}};
     const size_t state_count = sizeof(states) / sizeof(states[0]);
@@ -2187,6 +2253,7 @@ int main(int argc, char **argv) {
     test_rotation_matrix(argv[1]);
     test_sheet_order_matrix(argv[1]);
     test_automatic_duplex_eligibility(argv[1]);
+    test_ppd_defaults_matrix(argv[1]);
     test_duplex_transition_matrix(argv[1]);
     test_rejection_matrix(argv[1]);
     test_truncation_and_output_failures(argv[1]);
