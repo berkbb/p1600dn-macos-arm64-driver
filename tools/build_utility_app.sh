@@ -45,6 +45,13 @@ for lproj in "$root"/utility/Resources/*.lproj; do
     cp "$lproj"/*.strings "$staging/Contents/Resources/$language/"
 done
 
+# Sources copied over USB or AirDrop can be mode 0700 and carry Finder info,
+# quarantine or provenance attributes, which cp keeps: codesign refuses Finder
+# info, and an installed bundle owned by root must be readable by every user.
+/usr/bin/xattr -cr "$staging"
+find "$staging" -type d -exec chmod 755 {} +
+find "$staging" -type f -exec chmod 644 {} +
+chmod 755 "$staging/Contents/MacOS/"*
 /usr/bin/codesign --force --sign - --options runtime --identifier com.berkbb.p1600dn.utility "$staging" 2>/dev/null
 /usr/bin/codesign --verify --strict "$staging"
 rm -rf "$app"

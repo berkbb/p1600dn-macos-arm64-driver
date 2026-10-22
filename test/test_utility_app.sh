@@ -56,6 +56,29 @@ PY
 [ -z "$mismatch" ] || fail "Utility.strings keys: $mismatch"
 echo "    [PASS] Utility app localizations: $count languages, every key the window uses, the same keys in all"
 
+# The header follows CUPS: a model probe (no window) against the stand-in
+# cupsd of test/test_notify.c, which starts printing with the toner at 12%
+# after the utility's first lookup.
+probe_work=$(mktemp -d "${TMPDIR:-/tmp}/p1600dn-probe.XXXXXX")
+cc -std=c11 -O1 -Wall -Wextra -Werror -I"$root/src" "$root/test/test_notify.c" "$root/src/p1600_notify.c" -lcups \
+    -o "$probe_work/test_notify" || fail "Stand-in cupsd did not build"
+swiftc -target arm64-apple-macos11.0 -swift-version 5 -O -D UTILITY_RENDER -parse-as-library \
+    -import-objc-header "$root/utility/Bridging.h" -Xcc -I"$root/src" \
+    "$root/utility/P1600dnUtility.swift" "$root/test/utility_probe.swift" "$root/build/utility"/*.o \
+    -lcups -framework IOKit -framework CoreFoundation -framework CoreGraphics -framework CoreText \
+    -o "$probe_work/utility_probe" 2>"$probe_work/build.log" || { cat "$probe_work/build.log" >&2; fail "Probe did not build"; }
+"$probe_work/test_notify" --serve "$probe_work/port" utility >"$probe_work/serve.out" 2>"$probe_work/serve.err" &
+stand_in=$!
+for _ in $(seq 1 100); do [ -s "$probe_work/port" ] && break; sleep 0.1; done
+[ -s "$probe_work/port" ] || { kill "$stand_in" 2>/dev/null; fail "Stand-in cupsd did not start"; }
+seen=$(CUPS_SERVER="127.0.0.1:$(cat "$probe_work/port")" "$probe_work/utility_probe" P1600DN_Notify_Test) || seen="probe failed"
+kill "$stand_in" 2>/dev/null || true
+wait "$stand_in" 2>/dev/null || true
+[ "$seen" = "state=4 toner=12" ] ||
+    fail "Utility header did not follow CUPS: $seen ($(cat "$probe_work/serve.out" "$probe_work/serve.err" | tr '\n' ' '))"
+rm -rf "$probe_work"
+echo "    [PASS] Utility header follows CUPS: printer state and toner level looked up again while it runs"
+
 if [ "$(id -u)" -eq 0 ] || [ "$(launchctl managername 2>/dev/null)" != "Aqua" ]; then
     echo "    [SKIP] Utility app launch (needs a logged-in user's GUI session)"
     exit 0
@@ -67,6 +90,14 @@ queue="P1600DN_Test_Queue"
 received=$("$work/utility_launch" "$app" "$work/report" "$queue") || fail "Launch: $received"
 [ "$received" = "$queue" ] || fail "App received printer \"$received\" instead of \"$queue\""
 echo "    [PASS] Utility app launched by macOS with the queue in 'prdt' (macOS's launch protocol for printer utilities)"
+# The running utility gets the next printer the same way (Printers & Scanners,
+# a notification for another queue).
+rm -f "$work/report"
+next="P1600DN_Other_Queue"
+received=$("$work/utility_launch" "$app" "$work/report" "$queue" "$next") || fail "Second launch: $received"
+[ "$received" = "$queue
+$next" ] || fail "Running app received \"$received\" instead of \"$queue\" then \"$next\""
+echo "    [PASS] Running utility gets the next printer from a later Open Application event"
 
 # The window itself: drawn off screen with stand-in printers and captured by
 # the app (ScreenCaptureKit lets an app capture its own windows from macOS

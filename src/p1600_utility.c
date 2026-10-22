@@ -242,13 +242,15 @@ void p1600_printer_link_close(P1600PrinterLink *link) {
     free(link);
 }
 
-static int inquire_number(const char *device_uri, const char *variable, int *number, char *error, size_t error_size) {
+static int inquire_number(const char *device_uri, const char *variable, int *number, int *answered, char *error,
+                          size_t error_size) {
     P1600PrinterLink *link = p1600_printer_link_open(device_uri, error, error_size);
     if (!link) return -1;
     char value[32];
     int status = p1600_printer_link_inquire(link, variable, value, sizeof(value));
     p1600_printer_link_close(link);
     if (status != 0) return 0;
+    (*answered)++;  /* "?" included: the printer is listening */
     if (strcasecmp(variable, "QUIETMODE") == 0) {
         if (strcasecmp(value, "ON") == 0) *number = 1;
         else if (strcasecmp(value, "OFF") == 0) *number = 0;
@@ -266,17 +268,25 @@ static int inquire_number(const char *device_uri, const char *variable, int *num
 int p1600_utility_read_settings(const char *device_uri, P1600PrinterSettings *settings, char *error, size_t error_size) {
     if (!settings) return -1;
     *settings = (P1600PrinterSettings){-1, -1, -1};
-    int read = 0, status;
-    if ((status = inquire_number(device_uri, "POWERSAVETIME", &settings->sleep_minutes, error, error_size)) < 0) {
+    int read = 0, answered = 0, status;
+    if ((status = inquire_number(device_uri, "POWERSAVETIME", &settings->sleep_minutes, &answered, error,
+                                 error_size)) < 0) {
         return -1;
     }
     read += status;
-    if ((status = inquire_number(device_uri, "INACTIVEOFFTIME", &settings->auto_off_minutes, error, error_size)) < 0) {
+    if ((status = inquire_number(device_uri, "INACTIVEOFFTIME", &settings->auto_off_minutes, &answered, error,
+                                 error_size)) < 0) {
         return -1;
     }
     read += status;
-    if ((status = inquire_number(device_uri, "QUIETMODE", &settings->quiet_mode, error, error_size)) < 0) return -1;
-    return read + status;
+    if ((status = inquire_number(device_uri, "QUIETMODE", &settings->quiet_mode, &answered, error, error_size)) < 0) {
+        return -1;
+    }
+    read += status;
+    /* A printer that took the connections but answered none of the
+     * questions (busy with a job on its AppSocket port, asleep) has not been
+     * read: the window keeps the settings disabled and offers Try Again. */
+    return answered > 0 ? read : fail(error, error_size, "The printer did not answer");
 }
 
 int p1600_utility_send(const char *device_uri, const char *data, size_t length, char *error, size_t error_size) {

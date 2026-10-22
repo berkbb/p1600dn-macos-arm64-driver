@@ -81,7 +81,7 @@ typedef struct {
 
 /* Reads POWERSAVETIME, INACTIVEOFFTIME, then QUIETMODE, each in its
  * own session. Returns how many values were read, or -1 with a reason when
- * the printer could not be reached. */
+ * the printer could not be reached or answered none of them. */
 int p1600_utility_read_settings(const char *device_uri, P1600PrinterSettings *settings, char *error, size_t error_size);
 
 /* Sends one action in its own session. 0, or -1 with a reason. */

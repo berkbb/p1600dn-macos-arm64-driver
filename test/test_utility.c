@@ -23,6 +23,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <cups/cups.h>
 
 #include "p1600_ews_proxy.h"
 #include "p1600_queues.h"
@@ -53,7 +54,33 @@ static void test_queue_levels(void) {
     assert(p1600_queue_first_level("toner") == -1);
     assert(p1600_queue_is_p1600dn("HP LaserJet Professional P1606dn, hpcups"));
     assert(!p1600_queue_is_p1600dn("HP DeskJet 3700 series"));
-    puts("    [PASS] Queue toner levels (marker-levels) and model match");
+    /* Bonjour printers (this Mac's own AirPrint advertisement among them)
+     * are not queues: printer-type 0x1000000 (CUPS_PRINTER_DISCOVERED). */
+    assert(p1600_queue_is_discovered("16777220"));   /* 0x1000004: discovered, black and white */
+    assert(p1600_queue_is_discovered("16777216"));
+    assert(!p1600_queue_is_discovered("8396868"));    /* 0x802044: a local queue */
+    assert(!p1600_queue_is_discovered("4"));
+    assert(!p1600_queue_is_discovered(""));
+    assert(!p1600_queue_is_discovered(NULL));
+    assert(!p1600_queue_is_discovered("printer"));
+    /* Driverless queues (one macOS makes from this Mac's own AirPrint
+     * advertisement among them) are not driver queues. */
+    assert(p1600_queue_is_p1600dn("HP LaserJet Professional P1600dn Series (Native ARM64)"));
+    assert(!p1600_queue_is_p1600dn("HP LaserJet Professional P1600dn Series (Native ARM64)-AirPrint"));
+    assert(!p1600_queue_is_p1600dn("HP LaserJet Professional P1600dn Series (Native ARM64)-airprint"));
+    assert(!p1600_queue_is_p1600dn("HP LaserJet Professional P1606dn - IPP Everywhere"));
+    assert(p1600_queue_is_driverless("HP DeskJet 3700 series-AirPrint") && !p1600_queue_is_driverless("AirPrint"));
+    assert(!p1600_queue_is_driverless(NULL) && !p1600_queue_is_driverless(""));
+    /* No cupsd to ask is not "no queues": -1, so the AirPrint server's queue
+     * watcher keeps serving instead of restarting. */
+    P1600Queue unreachable[2];
+    cupsSetServer("/nonexistent/p1600dn-test-cupsd.sock");
+    assert(p1600_queue_list(unreachable, 2) == -1);
+    P1600Queue found;
+    char error[128];
+    assert(p1600_queue_find(NULL, &found, error, sizeof(error)) == -1);
+    cupsSetServer(NULL);
+    puts("    [PASS] Queue toner levels (marker-levels), model match, Bonjour and driverless printers left out, CUPS unreachable");
 }
 
 static void test_commands(void) {
@@ -288,6 +315,19 @@ static void test_link(void) {
     assert(settings.auto_off_minutes == -1 && settings.quiet_mode == -1);
     fake_printer_stop(&printer);
 
+    /* A printer that takes the connection and answers nothing (busy, asleep)
+     * has not been read; one that only says "?" has. */
+    fake_printer_start(&printer, NULL, NULL, NULL);
+    snprintf(uri, sizeof(uri), "socket://127.0.0.1:%d", printer.port);
+    assert(p1600_utility_read_settings(uri, &settings, error, sizeof(error)) == -1);
+    assert(strstr(error, "did not answer") != NULL);
+    assert(settings.sleep_minutes == -1 && settings.auto_off_minutes == -1 && settings.quiet_mode == -1);
+    fake_printer_stop(&printer);
+    fake_printer_start(&printer, "?", "?", "?");
+    snprintf(uri, sizeof(uri), "socket://127.0.0.1:%d", printer.port);
+    assert(p1600_utility_read_settings(uri, &settings, error, sizeof(error)) == 0);
+    fake_printer_stop(&printer);
+
     /* No printer at all. */
     assert(p1600_utility_read_settings(uri, &settings, error, sizeof(error)) == -1);
     assert(strstr(error, "127.0.0.1:") != NULL);
@@ -310,7 +350,7 @@ static void test_link(void) {
                                   sizeof(error)) == 1);
     assert(p1600_utility_web_address("serial://dev/cu.x", url, sizeof(url), error, sizeof(error)) == -1);
     assert(p1600_utility_web_address("socket://192.0.2.7", url, 8, error, sizeof(error)) == -1);
-    puts("[PASS] Printer link: INQUIRE sessions, settings, unknown values, sending, failures, web address");
+    puts("[PASS] Printer link: INQUIRE sessions, settings, unknown values, no answer, sending, failures, web address");
 }
 
 /* --- p1600dn-utility ---------------------------------------------------- */
@@ -425,6 +465,10 @@ typedef struct {
     size_t position;
     bool fail;
     bool closed;
+    int closes;
+    bool late;               /* the printer answers after the proxy's read timed out */
+    const char *stale;       /* that late reply, in the USB pipe in front of the next one */
+    size_t reads_after_end;  /* reads after the reply ended: 10 s each over USB */
 } FakeLedm;
 
 static int ledm_write(void *context, const void *data, size_t length) {
@@ -433,23 +477,40 @@ static int ledm_write(void *context, const void *data, size_t length) {
     memcpy(ledm->request, data, length);
     ledm->request_length = length;
     ledm->position = 0;
+    ledm->reads_after_end = 0;
     return 0;
 }
 
 static ssize_t ledm_read(void *context, void *buffer, size_t length, int timeout_ms) {
     (void)timeout_ms;
     FakeLedm *ledm = context;
-    size_t left = strlen(ledm->response) - ledm->position;
-    if (left == 0) return -1;
+    if (ledm->late) {
+        ledm->late = false;
+        ledm->stale = ledm->response;
+        return -1;
+    }
+    bool stale = ledm->stale && *ledm->stale;
+    size_t total = strlen(ledm->response);
+    const char *next = stale ? ledm->stale : ledm->response + (ledm->position < total ? ledm->position : total);
+    size_t left = strlen(next);
+    if (left == 0) {
+        ledm->reads_after_end++;
+        return -1;
+    }
     size_t amount = left < length ? left : length;
     if (amount > 7U) amount = 7U;  /* small packets */
-    memcpy(buffer, ledm->response + ledm->position, amount);
-    ledm->position += amount;
+    memcpy(buffer, next, amount);
+    if (stale) {
+        ledm->stale += amount;
+    } else {
+        ledm->position += amount;
+    }
     return (ssize_t)amount;
 }
 
 static void ledm_close(void *context) {
     ((FakeLedm *)context)->closed = true;
+    ((FakeLedm *)context)->closes++;
 }
 
 static char *browser_get(const char *url, const char *request_text) {
@@ -476,8 +537,12 @@ static void test_ews_proxy(void) {
     P1600EwsProxy *proxy = p1600_ews_proxy_start(transport, 30, url, sizeof(url), error, sizeof(error));
     assert(proxy && p1600_ews_proxy_running(proxy));
     assert(strncmp(url, "http://127.0.0.1:", 17) == 0 && strstr(url, "/SSI/index.htm"));
+    unsigned port = 0;
+    assert(sscanf(url, "http://127.0.0.1:%u/", &port) == 1);
 
-    static const char get[] = "GET /SSI/index.htm HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n";
+    char get[256], post[256], request[512];
+    snprintf(get, sizeof(get), "GET /SSI/index.htm HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nConnection: keep-alive\r\n\r\n",
+             port);
     char *response = browser_get(url, get);
     assert(strcmp(response, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 13\r\nConnection: close\r\n\r\n"
                             "<html></html>") == 0);
@@ -486,10 +551,81 @@ static void test_ews_proxy(void) {
 
     /* A form post reaches the printer with its body. */
     ledm.response = "HTTP/1.1 302 Found\r\nLocation: /SSI/index.htm\r\nContent-Length: 0\r\n\r\n";
-    static const char post[] = "POST /SSI/set HTTP/1.1\r\nHost: x\r\nContent-Length: 11\r\n\r\nQuietMode=1";
+    snprintf(post, sizeof(post), "POST /SSI/set HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nOrigin: http://127.0.0.1:%u\r\n"
+             "Sec-Fetch-Site: same-origin\r\nContent-Length: 11\r\n\r\nQuietMode=1", port, port);
     response = browser_get(url, post);
     assert(strstr(response, "HTTP/1.1 302 Found\r\nLocation: /SSI/index.htm\r\nContent-Length: 0\r\n"));
     assert(ledm.request_length == strlen(post) && memcmp(ledm.request, post, ledm.request_length) == 0);
+    free(response);
+
+    /* Only this proxy's own pages reach the printer: a form another site's
+     * page posts, a cross-site request, a DNS rebinding page (its Host) and
+     * a request without Host get 403, and nothing is sent. The browser may
+     * name the proxy 127.0.0.1 or localhost. */
+    static const char *const refused_heads[] = {
+        "POST /SSI/set HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nOrigin: https://attacker.example\r\n"
+        "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 11\r\n\r\nQuietMode=1",
+        "POST /SSI/set HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nOrigin: null\r\nContent-Length: 11\r\n\r\nQuietMode=1",
+        "POST /SSI/set HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nReferer: http://attacker.example/x.html\r\n"
+        "Content-Length: 11\r\n\r\nQuietMode=1",
+        "GET /SSI/index.htm HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nSec-Fetch-Site: cross-site\r\n\r\n",
+        "GET /SSI/index.htm HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nSec-Fetch-Site: same-site\r\n\r\n",
+        "GET /SSI/index.htm HTTP/1.1\r\nHost: rebind.attacker.example:%u\r\n\r\n",
+        "GET /SSI/index.htm HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Port: %u\r\n\r\n",
+        "GET /SSI/index.htm HTTP/1.1\r\nX-Port: %u\r\n\r\n",
+    };
+    for (size_t i = 0; i < sizeof(refused_heads) / sizeof(refused_heads[0]); i++) {
+        ledm.request_length = 0;
+        snprintf(request, sizeof(request), refused_heads[i], port);
+        response = browser_get(url, request);
+        if (strncmp(response, "HTTP/1.1 403 Forbidden\r\n", 24) != 0 || ledm.request_length != 0) {
+            fprintf(stderr, "forwarded: %s\n", request);
+            assert(0 && "a request from another site reached the printer");
+        }
+        free(response);
+    }
+    snprintf(request, sizeof(request), "POST /SSI/set HTTP/1.1\r\nHost: localhost:%u\r\nOrigin: http://localhost:%u\r\n"
+             "Content-Length: 11\r\n\r\nQuietMode=1", port, port);
+    response = browser_get(url, request);
+    assert(strncmp(response, "HTTP/1.1 302 Found\r\n", 20) == 0 && ledm.request_length == strlen(request));
+    free(response);
+    snprintf(request, sizeof(request), "POST /SSI/set HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n"
+             "Referer: http://127.0.0.1:%u/SSI/index.htm\r\nContent-Length: 11\r\n\r\nQuietMode=1", port, port);
+    response = browser_get(url, request);
+    assert(strncmp(response, "HTTP/1.1 302 Found\r\n", 20) == 0 && ledm.request_length == strlen(request));
+    free(response);
+
+    /* Replies without a body end with their header (RFC 9112 section 6.3):
+     * a 304 with the cached page's length, a 204, a reply to HEAD, after a
+     * 100 Continue. Over USB a read past the reply waits 10 s, and a missing
+     * body was a 502. */
+    ledm.response = "HTTP/1.1 304 Not Modified\r\nETag: \"a1\"\r\nContent-Length: 13\r\n\r\n";
+    snprintf(request, sizeof(request), "GET /SSI/index.htm HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nIf-None-Match: \"a1\"\r\n\r\n",
+             port);
+    response = browser_get(url, request);
+    assert(strncmp(response, "HTTP/1.1 304 Not Modified\r\n", 27) == 0 && ledm.reads_after_end == 0);
+    free(response);
+    ledm.response = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 204 No Content\r\n\r\n";
+    response = browser_get(url, post);
+    assert(strncmp(response, "HTTP/1.1 204 No Content\r\n", 25) == 0 && ledm.reads_after_end == 0);
+    free(response);
+    ledm.response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 13\r\n\r\n";
+    snprintf(request, sizeof(request), "HEAD /SSI/index.htm HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n\r\n", port);
+    response = browser_get(url, request);
+    assert(strncmp(response, "HTTP/1.1 200 OK\r\n", 17) == 0 && ledm.reads_after_end == 0);
+    free(response);
+
+    /* The printer answers after the proxy gave up (502). Its late reply is
+     * still in the USB pipe and must not answer the next request. */
+    ledm.response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 6\r\n\r\nPage A";
+    ledm.late = true;
+    response = browser_get(url, get);
+    assert(strncmp(response, "HTTP/1.1 502 Bad Gateway\r\n", 26) == 0);
+    free(response);
+    ledm.response = "HTTP/1.1 200 OK\r\nContent-Type: image/gif\r\nContent-Length: 7\r\n\r\nImage B";
+    snprintf(request, sizeof(request), "GET /SSI/b.gif HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n\r\n", port);
+    response = browser_get(url, request);
+    assert(strstr(response, "HTTP/1.1 200 OK\r\nContent-Type: image/gif\r\n") && strstr(response, "\r\n\r\nImage B"));
     free(response);
 
     /* The printer does not answer. */
@@ -506,7 +642,7 @@ static void test_ews_proxy(void) {
     assert(response[0] == '\0');
     free(response);
     p1600_ews_proxy_stop(proxy);
-    assert(ledm.closed);
+    assert(ledm.closed && ledm.closes == 1);
 
     /* The proxy ends after its idle time. */
     FakeLedm idle = {.response = ""};
@@ -515,8 +651,20 @@ static void test_ews_proxy(void) {
     assert(proxy);
     p1600_ews_proxy_wait(proxy);
     assert(!p1600_ews_proxy_running(proxy));
+    /* Idle, it lets go of the printer's interface at once (the toner query
+     * needs it while the utility stays open), and its address refuses
+     * connections; stopping it later closes nothing twice. */
+    assert(idle.closed && idle.closes == 1);
+    unsigned idle_port = 0;
+    assert(sscanf(url, "http://127.0.0.1:%u/", &idle_port) == 1);
+    int refused = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in idle_address = {.sin_family = AF_INET, .sin_port = htons((uint16_t)idle_port),
+                                       .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    assert(refused >= 0 && connect(refused, (struct sockaddr *)&idle_address, sizeof(idle_address)) != 0 &&
+           errno == ECONNREFUSED);
+    close(refused);
     p1600_ews_proxy_stop(proxy);
-    assert(idle.closed);
+    assert(idle.closes == 1);
 
     P1600EwsTransport broken = {NULL, NULL, NULL, NULL};
     assert(!p1600_ews_proxy_start(broken, 1, url, sizeof(url), error, sizeof(error)));
@@ -527,7 +675,9 @@ static void test_ews_proxy(void) {
     assert(!p1600_ews_proxy_running(NULL));
     p1600_ews_proxy_wait(NULL);
     p1600_ews_proxy_stop(NULL);
-    puts("[PASS] EWS proxy: chunked pages re-framed, form posts, printer failures (502), idle end");
+    puts("[PASS] EWS proxy: chunked pages re-framed, form posts, printer failures (502), idle end frees the printer");
+    puts("[PASS] EWS proxy: other sites' requests refused (Host, Origin, Referer, Sec-Fetch-Site), bodiless replies, "
+         "late replies dropped");
 }
 
 int main(int argc, char **argv) {

@@ -41,18 +41,33 @@ func makeUtilityWindow(model: UtilityModel) -> NSWindow {
     return window
 }
 
+/// The CUPS queue in an Open Application event's 'prdt' parameter.
+private func eventPrinter(_ event: NSAppleEventDescriptor?) -> String? {
+    event?.paramDescriptor(forKeyword: AEKeyword(0x7072_6474))?.stringValue  // 'prdt'
+}
+
 /// macOS opens the printer utility (`*APPrinterUtilityPath`) with an Open
-/// Application event whose 'prdt' parameter is the CUPS queue name.
+/// Application event whose 'prdt' parameter is the CUPS queue name. A running
+/// utility gets the same event (Printers & Scanners, a notification for
+/// another printer) and switches to that printer.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
+    private var proxyWatch: Timer?
+    /// Launch check for the test suite: the queues macOS handed over, one per
+    /// line, then the app quits after P1600DN_UTILITY_LAUNCH_EVENTS events.
+    private let launchReport = ProcessInfo.processInfo.environment["P1600DN_UTILITY_LAUNCH_REPORT"]
+    private let launchEvents = Int(ProcessInfo.processInfo.environment["P1600DN_UTILITY_LAUNCH_EVENTS"] ?? "") ?? 1
+    private var reported: [String] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let printer = NSAppleEventManager.shared().currentAppleEvent?
-            .paramDescriptor(forKeyword: AEKeyword(0x7072_6474))?.stringValue  // 'prdt'
-        if let report = ProcessInfo.processInfo.environment["P1600DN_UTILITY_LAUNCH_REPORT"] {
-            // Launch check for the test suite: which queue macOS handed over.
-            try? (printer ?? "").write(toFile: report, atomically: true, encoding: .utf8)
-            NSApp.terminate(nil)
+        let printer = eventPrinter(NSAppleEventManager.shared().currentAppleEvent)
+        // Later Open and Reopen Application events reach the running utility.
+        for id in [kAEOpenApplication, kAEReopenApplication] {
+            NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(openEvent(_:withReply:)),
+                                                         forEventClass: AEEventClass(kCoreEventClass), andEventID: AEEventID(id))
+        }
+        if launchReport != nil {
+            report(printer)
             return
         }
         UtilityModel.shared.start(queue: printer)
@@ -62,7 +77,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.window = window
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    @objc private func openEvent(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
+        let printer = eventPrinter(event)
+        if launchReport != nil {
+            report(printer)
+            return
+        }
+        if let printer = printer, !printer.isEmpty { UtilityModel.shared.select(queue: printer) }
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func report(_ printer: String?) {
+        guard let path = launchReport else { return }
+        reported.append(printer ?? "")
+        try? reported.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        if reported.count >= launchEvents { NSApp.terminate(nil) }
+    }
+
+    /// HTML Config over USB runs in this process: with its window closed the
+    /// utility keeps serving the printer's pages until they are idle
+    /// (P1600_EWS_IDLE_SECONDS), then quits.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        guard UtilityModel.shared.webPagesServed else { return true }
+        proxyWatch?.invalidate()
+        proxyWatch = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] timer in
+            guard let self = self else { return }
+            if self.window?.isVisible == true {
+                timer.invalidate()  // closing the window again asks again
+            } else if !UtilityModel.shared.webPagesServed {
+                timer.invalidate()
+                NSApp.terminate(nil)
+            }
+        }
+        return false
+    }
 }
 
 struct PrinterQueue: Identifiable, Hashable {
@@ -120,7 +169,7 @@ enum InformationPage: Int, CaseIterable {
 
 /// What the utility is doing with the printer; one thing at a time.
 enum UtilityTask: Equatable {
-    case reading, saving, printing(InformationPage)
+    case reading, saving, printing(InformationPage), openingWebPages
 }
 
 final class UtilityModel: ObservableObject {
@@ -149,27 +198,81 @@ final class UtilityModel: ObservableObject {
 
     var busy: Bool { task != nil }
     var selectedQueue: PrinterQueue? { queues.first { $0.name == queueName } }
+    /// HTML Config's USB proxy is serving the printer's pages.
+    var webPagesServed: Bool { webProxy.map { p1600_ews_proxy_running($0) } ?? false }
 
     func start(queue: String?) {
         var found = [P1600Queue](repeating: P1600Queue(), count: 32)
         let count = Int(p1600_queue_list(&found, 32))
-        var list = (0..<min(max(count, 0), 32)).map { PrinterQueue(found[$0]) }
-        // A queue macOS names is used even if its model name was changed.
-        if let queue = queue, !queue.isEmpty, !list.contains(where: { $0.name == queue }) {
+        queues = (0..<min(max(count, 0), 32)).map { PrinterQueue(found[$0]) }
+        let named = queue.map { !$0.isEmpty && select(queue: $0) } ?? false
+        if !named, let first = queues.first { queueName = first.name }
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
+            self?.refreshQueue()
+        }
+    }
+
+    /// The header's printer state and toner level follow CUPS: looked up
+    /// again every few seconds, after each printer task and when macOS names
+    /// the printer again. Off the printer queue, which can wait 10 s on USB.
+    static let refreshInterval: TimeInterval = 5
+    private var refreshTimer: Timer?
+    private var refreshing = false
+    private let lookup = DispatchQueue(label: "com.berkbb.p1600dn.utility.cups", qos: .utility)
+
+    func refreshQueue() {
+        guard !refreshing, let name = selectedQueue?.name else { return }
+        refreshing = true
+        lookup.async {
             var entry = P1600Queue()
             var error = [CChar](repeating: 0, count: 256)
-            if p1600_queue_find(queue, &entry, &error, error.count) == 0 {
-                list.insert(PrinterQueue(entry), at: 0)
-            } else {
-                message = cString(error)
+            let found = p1600_queue_find(name, &entry, &error, error.count) == 0
+            DispatchQueue.main.async {
+                self.refreshing = false
+                guard found, let index = self.queues.firstIndex(where: { $0.name == name }) else { return }
+                let fresh = PrinterQueue(entry)
+                if self.queues[index].state != fresh.state { self.queues[index].state = fresh.state }
+                if self.queues[index].tonerLevel != fresh.tonerLevel { self.queues[index].tonerLevel = fresh.tonerLevel }
             }
         }
-        queues = list
-        if let queue = queue, list.contains(where: { $0.name == queue }) {
-            queueName = queue
-        } else if let first = list.first {
-            queueName = first.name
+    }
+
+    /// The queue macOS names, at launch or while the utility runs; it is used
+    /// even if its model name was changed. False when CUPS does not know it.
+    @discardableResult
+    func select(queue: String) -> Bool {
+        if !queues.contains(where: { $0.name == queue }) {
+            var entry = P1600Queue()
+            var error = [CChar](repeating: 0, count: 256)
+            guard p1600_queue_find(queue, &entry, &error, error.count) == 0 else {
+                show(cString(error), error: true)
+                return false
+            }
+            queues.insert(PrinterQueue(entry), at: 0)
         }
+        if queueName != queue {
+            // A switch waits for the printer task under way.
+            if busy {
+                pendingQueue = queue
+            } else {
+                queueName = queue
+            }
+        }
+        refreshQueue()
+        return true
+    }
+
+    /// A printer named while a task ran; selected when it ends.
+    private var pendingQueue: String?
+
+    private func finishTask() {
+        task = nil
+        if let queue = pendingQueue {
+            pendingQueue = nil
+            queueName = queue
+        }
+        refreshQueue()
     }
 
     /// Reads the chosen printer's settings: POWERSAVETIME, INACTIVEOFFTIME, QUIETMODE.
@@ -184,7 +287,7 @@ final class UtilityModel: ObservableObject {
             var error = [CChar](repeating: 0, count: 256)
             let read = p1600_utility_read_settings(queue.deviceURI, &settings, &error, error.count)
             DispatchQueue.main.async {
-                self.task = nil
+                self.finishTask()
                 self.readSleep = Int(settings.sleep_minutes)
                 self.readAutoOff = Int(settings.auto_off_minutes)
                 self.readQuiet = Int(settings.quiet_mode)
@@ -240,7 +343,7 @@ final class UtilityModel: ObservableObject {
                 p1600_utility_send(queue.deviceURI, bytes.baseAddress, bytes.count, &error, error.count) != 0
             }
             DispatchQueue.main.async {
-                self.task = nil
+                self.finishTask()
                 if failed {
                     reverted()
                     self.show(failureText(error), error: true)
@@ -287,7 +390,7 @@ final class UtilityModel: ObservableObject {
                 }
             }
             DispatchQueue.main.async {
-                self.task = nil
+                self.finishTask()
                 self.show(failed ? failureText(error) : ownText("PageSent"), error: failed)
             }
         }
@@ -304,23 +407,39 @@ final class UtilityModel: ObservableObject {
     }
 
     /// HTML Config: the printer's web pages; for a USB printer through a local
-    /// proxy over its LEDM interface.
+    /// proxy over its LEDM interface. On the printer queue: a Bonjour printer is
+    /// resolved (up to 5 s) and an old proxy is stopped (joining its thread)
+    /// without holding up the window.
     func openWebPages() {
-        guard let queue = selectedQueue else { return }
-        var url = [CChar](repeating: 0, count: 512)
-        var error = [CChar](repeating: 0, count: 256)
-        let network = p1600_utility_web_address(queue.deviceURI, &url, url.count, &error, error.count)
-        if network == 1 {
-            if let proxy = webProxy, p1600_ews_proxy_running(proxy) {
-                p1600_ews_proxy_stop(proxy)
+        guard let queue = selectedQueue, !busy else { return }
+        task = .openingWebPages
+        message = ""
+        let oldProxy = webProxy
+        webProxy = nil
+        printer.async {
+            // An old proxy is stopped and freed (one that went idle has
+            // already let go of the printer's USB interface).
+            if let proxy = oldProxy { p1600_ews_proxy_stop(proxy) }
+            var url = [CChar](repeating: 0, count: 512)
+            var error = [CChar](repeating: 0, count: 256)
+            let network = p1600_utility_web_address(queue.deviceURI, &url, url.count, &error, error.count)
+            var proxy: OpaquePointer?
+            var failed = network < 0
+            if network == 1 {
+                proxy = p1600_ews_proxy_start_usb(queue.deviceURI, Int32(P1600_EWS_IDLE_SECONDS), &url, url.count, &error, error.count)
+                failed = proxy == nil
             }
-            webProxy = p1600_ews_proxy_start_usb(queue.deviceURI, Int32(P1600_EWS_IDLE_SECONDS), &url, url.count, &error, error.count)
-            if webProxy == nil { message = failureText(error); return }
-        } else if network < 0 {
-            message = failureText(error)
-            return
+            let address = failed ? nil : URL(string: cString(url))
+            DispatchQueue.main.async {
+                self.webProxy = proxy
+                self.finishTask()
+                if failed {
+                    self.show(failureText(error), error: true)
+                } else if let address = address {
+                    NSWorkspace.shared.open(address)
+                }
+            }
         }
-        if let address = URL(string: cString(url)) { NSWorkspace.shared.open(address) }
     }
 
 }
@@ -490,7 +609,9 @@ struct UtilityView: View {
 
     private var webRow: some View {
         row(Text(rowTitle(ownText("PrinterWebPage")))) {
+            if model.task == .openingWebPages { Spinner() }
             Button(ownText("Open")) { model.openWebPages() }
+                .disabled(model.busy)
         }
     }
 
