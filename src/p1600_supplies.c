@@ -124,11 +124,11 @@ static bool keep_line(char *head, size_t head_size, const char *line) {
 
 int p1600_http_read_response(P1600ByteReader read, void *context, unsigned char *body,
                           size_t capacity, size_t *body_length) {
-    return p1600_http_read_message(read, context, NULL, 0, body, capacity, body_length);
+    return p1600_http_read_message(read, context, false, NULL, 0, body, capacity, body_length);
 }
 
-int p1600_http_read_message(P1600ByteReader read, void *context, char *head, size_t head_size, unsigned char *body,
-                         size_t capacity, size_t *body_length) {
+int p1600_http_read_message(P1600ByteReader read, void *context, bool head_request, char *head, size_t head_size,
+                         unsigned char *body, size_t capacity, size_t *body_length) {
     if (!read || !body_length || (!body && capacity != 0) || (head && head_size == 0)) return -1;
     *body_length = 0;
     if (head) head[0] = '\0';
@@ -140,44 +140,57 @@ int p1600_http_read_message(P1600ByteReader read, void *context, char *head, siz
 
     char line[1024];
     int major = 0, minor = 0, status = -1;
-    if (stream_line(stream, line, sizeof(line)) < 0 ||
-        sscanf(line, "HTTP/%d.%d %d", &major, &minor, &status) != 3 || status < 100 || status > 999 ||
-        !keep_line(head, head_size, line)) {
-        free(stream);
-        return -1;
-    }
-
     bool chunked = false;
     long long content_length = -1;
-    int headers = 0;
-    for (;;) {
-        int length = stream_line(stream, line, sizeof(line));
-        if (length < 0 || ++headers > 100) {
+    /* An interim 1xx reply (100 Continue to a forwarded Expect) comes before
+     * the real one. */
+    for (int replies = 0; status < 200 && status != 101; replies++) {
+        if (head) head[0] = '\0';
+        chunked = false;
+        content_length = -1;
+        if (replies > 4 || stream_line(stream, line, sizeof(line)) < 0 ||
+            sscanf(line, "HTTP/%d.%d %d", &major, &minor, &status) != 3 || status < 100 || status > 999 ||
+            !keep_line(head, head_size, line)) {
             free(stream);
             return -1;
         }
-        if (length == 0) break;
-        if (!keep_line(head, head_size, line)) {
-            free(stream);
-            return -1;
-        }
-        char *colon = strchr(line, ':');
-        if (!colon) continue;
-        *colon = '\0';
-        const char *value = colon + 1;
-        value += strspn(value, " \t");
-        if (strcasecmp(line, "Content-Length") == 0) {
-            char *end = NULL;
-            errno = 0;
-            long long parsed = strtoll(value, &end, 10);
-            if (end == value || errno != 0 || parsed < 0) {
+        int headers = 0;
+        for (;;) {
+            int length = stream_line(stream, line, sizeof(line));
+            if (length < 0 || ++headers > 100) {
                 free(stream);
                 return -1;
             }
-            content_length = parsed;
-        } else if (strcasecmp(line, "Transfer-Encoding") == 0 && strcasestr(value, "chunked")) {
-            chunked = true;
+            if (length == 0) break;
+            if (!keep_line(head, head_size, line)) {
+                free(stream);
+                return -1;
+            }
+            char *colon = strchr(line, ':');
+            if (!colon) continue;
+            *colon = '\0';
+            const char *value = colon + 1;
+            value += strspn(value, " \t");
+            if (strcasecmp(line, "Content-Length") == 0) {
+                char *end = NULL;
+                errno = 0;
+                long long parsed = strtoll(value, &end, 10);
+                if (end == value || errno != 0 || parsed < 0) {
+                    free(stream);
+                    return -1;
+                }
+                content_length = parsed;
+            } else if (strcasecmp(line, "Transfer-Encoding") == 0 && strcasestr(value, "chunked")) {
+                chunked = true;
+            }
         }
+    }
+    /* RFC 9112 section 6.3: a reply to HEAD and a 101, 204 or 304 reply end
+     * with their header, whatever Content-Length or Transfer-Encoding say
+     * (over USB a read past the reply waits for the timeout). */
+    if (head_request || status == 101 || status == 204 || status == 304) {
+        free(stream);
+        return status;
     }
 
     size_t total = 0;

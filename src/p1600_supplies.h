@@ -53,9 +53,11 @@ int p1600_http_read_response(P1600ByteReader read, void *context, unsigned char 
                           size_t capacity, size_t *body_length);
 
 /* p1600_http_read_response() that also returns the status line and header
- * lines, each ending in CR LF, in `head` (the body is de-chunked). */
-int p1600_http_read_message(P1600ByteReader read, void *context, char *head, size_t head_size, unsigned char *body,
-                         size_t capacity, size_t *body_length);
+ * lines, each ending in CR LF, in `head` (the body is de-chunked). Interim
+ * 1xx replies are skipped; a reply to HEAD (`head_request`) and a 204 or
+ * 304 reply end with their header. */
+int p1600_http_read_message(P1600ByteReader read, void *context, bool head_request, char *head, size_t head_size,
+                         unsigned char *body, size_t capacity, size_t *body_length);
 
 /* First <dd:ConsumablePercentageLevelRemaining> (0-100), or -1. */
 int p1600_ledm_level(const char *xml, size_t length);

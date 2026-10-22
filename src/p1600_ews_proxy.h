@@ -40,7 +40,9 @@ P1600EwsProxy *p1600_ews_proxy_start_usb(const char *device_uri, int idle_second
 
 bool p1600_ews_proxy_running(P1600EwsProxy *proxy);
 
-/* Waits until the proxy ends on its own (idle). */
+/* Waits until the proxy ends on its own (idle). Ended, it has closed its
+ * listener and its transport (the printer's USB interface is free);
+ * p1600_ews_proxy_stop() still frees it. */
 void p1600_ews_proxy_wait(P1600EwsProxy *proxy);
 
 /* Stops serving and frees the proxy. */

@@ -24,12 +24,15 @@
 #define RESPONSE_BODY_LIMIT (8U * 1024U * 1024U)
 #define BROWSER_TIMEOUT_MS 5000
 #define PRINTER_TIMEOUT_MS 10000
+#define DRAIN_QUIET_MS 1000
 
 struct P1600EwsProxy {
     P1600EwsTransport transport;
     int listener;
     int wake[2];
     int idle_seconds;
+    unsigned port;
+    bool out_of_step;  /* an exchange failed: the printer's late reply may still come */
     pthread_t thread;
     bool joined;
     atomic_bool running;
@@ -122,6 +125,79 @@ static unsigned char *read_request(int fd, size_t *length) {
     return request;
 }
 
+/* The value of header `name` in the request head (without its blanks), or
+ * NULL. */
+static const char *header_value(const unsigned char *request, size_t head_length, const char *name,
+                                size_t *value_length) {
+    size_t name_length = strlen(name);
+    for (size_t i = 0; i + name_length + 1U < head_length; i++) {
+        if ((i > 0 && request[i - 1] != '\n') || strncasecmp((const char *)request + i, name, name_length) != 0 ||
+            request[i + name_length] != ':') {
+            continue;
+        }
+        const char *value = (const char *)request + i + name_length + 1U;
+        const char *end = (const char *)request + head_length;
+        while (value < end && (*value == ' ' || *value == '\t')) value++;
+        const char *line_end = value;
+        while (line_end < end && *line_end != '\r' && *line_end != '\n') line_end++;
+        while (line_end > value && (line_end[-1] == ' ' || line_end[-1] == '\t')) line_end--;
+        *value_length = (size_t)(line_end - value);
+        return value;
+    }
+    return NULL;
+}
+
+/* "<scheme>127.0.0.1:<port>" or "<scheme>localhost:<port>". */
+static bool own_address(const char *value, size_t length, unsigned port, const char *scheme) {
+    static const char *const hosts[] = {"127.0.0.1", "localhost"};
+    for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++) {
+        char expected[64];
+        int expected_length = snprintf(expected, sizeof(expected), "%s%s:%u", scheme, hosts[i], port);
+        if (expected_length > 0 && length == (size_t)expected_length && strncasecmp(value, expected, length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Only the browser's own pages of this proxy reach the printer: Host names
+ * the proxy (no DNS rebinding), and a request another site's page made
+ * (Sec-Fetch-Site, Origin, a form post's Referer) is refused (no CSRF
+ * against the printer's settings pages). */
+static bool from_own_pages(const P1600EwsProxy *proxy, const unsigned char *request, size_t length) {
+    const unsigned char *blank = memmem(request, length, "\r\n\r\n", 4);
+    size_t head = blank ? (size_t)(blank - request) + 2U : length;
+    size_t value_length = 0;
+    const char *value = header_value(request, head, "Host", &value_length);
+    if (!value || !own_address(value, value_length, proxy->port, "")) return false;
+    value = header_value(request, head, "Sec-Fetch-Site", &value_length);
+    if (value && !(value_length == 4 && strncasecmp(value, "none", 4) == 0) &&
+        !(value_length == 11 && strncasecmp(value, "same-origin", 11) == 0)) {
+        return false;
+    }
+    value = header_value(request, head, "Origin", &value_length);
+    if (value) return own_address(value, value_length, proxy->port, "http://");
+    bool safe = (length >= 4 && memcmp(request, "GET ", 4) == 0) || (length >= 5 && memcmp(request, "HEAD ", 5) == 0);
+    value = safe ? NULL : header_value(request, head, "Referer", &value_length);
+    if (value) {
+        const char *path = value_length > 7 ? memchr(value + 7, '/', value_length - 7) : NULL;
+        return path && own_address(value, (size_t)(path - value), proxy->port, "http://");
+    }
+    return true;
+}
+
+/* A reply that comes after its exchange failed (a printer slower than the
+ * timeout, a reply the reader gave up on) would answer the next request:
+ * drop what comes until the printer has been quiet for a second. */
+static void drain(P1600EwsTransport *transport) {
+    unsigned char scratch[4096];
+    for (size_t dropped = 0; dropped < RESPONSE_BODY_LIMIT;) {
+        ssize_t received = transport->read(transport->context, scratch, sizeof(scratch), DRAIN_QUIET_MS);
+        if (received <= 0) break;
+        dropped += (size_t)received;
+    }
+}
+
 typedef struct {
     P1600EwsTransport *transport;
 } PrinterReader;
@@ -134,15 +210,28 @@ static ssize_t read_printer(void *context, unsigned char *buffer, size_t length)
 /* The printer's answer, re-framed for the browser: its status line and
  * headers without the transfer framing, then Content-Length and close. */
 static void answer(P1600EwsProxy *proxy, int client, const unsigned char *request, size_t request_length) {
+    if (!from_own_pages(proxy, request, request_length)) {
+        static const char forbidden[] =
+            "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 43\r\nConnection: close\r\n\r\n"
+            "Only the printer utility's own HTML Config.";
+        send_all(client, forbidden, sizeof(forbidden) - 1U);
+        return;
+    }
     char *head = malloc(RESPONSE_HEAD_LIMIT);
     unsigned char *body = malloc(RESPONSE_BODY_LIMIT);
     size_t body_length = 0;
     int status = -1;
+    bool head_request = request_length >= 5 && memcmp(request, "HEAD ", 5) == 0;
+    if (proxy->out_of_step) {
+        drain(&proxy->transport);
+        proxy->out_of_step = false;
+    }
     if (head && body && proxy->transport.write(proxy->transport.context, request, request_length) == 0) {
         PrinterReader reader = {&proxy->transport};
-        status = p1600_http_read_message(read_printer, &reader, head, RESPONSE_HEAD_LIMIT, body, RESPONSE_BODY_LIMIT,
-                                      &body_length);
+        status = p1600_http_read_message(read_printer, &reader, head_request, head, RESPONSE_HEAD_LIMIT, body,
+                                      RESPONSE_BODY_LIMIT, &body_length);
     }
+    if (status < 0) proxy->out_of_step = true;
     if (status < 0) {
         static const char unavailable[] =
             "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: 34\r\nConnection: close\r\n\r\n"
@@ -194,6 +283,14 @@ static void *serve(void *argument) {
         free(request);
         close(client);
     }
+    /* Idle or stopped: the printer's USB interface is free again at once
+     * (the toner query and a new HTML Config need it), and the old address
+     * refuses connections instead of leaving them unanswered. A stop joins
+     * this thread before it frees the proxy. */
+    close(proxy->listener);
+    proxy->listener = -1;
+    if (proxy->transport.close) proxy->transport.close(proxy->transport.context);
+    proxy->transport.close = NULL;
     atomic_store(&proxy->running, false);
     return NULL;
 }
@@ -222,6 +319,7 @@ P1600EwsProxy *p1600_ews_proxy_start(P1600EwsTransport transport, int idle_secon
     proxy->transport = transport;
     proxy->listener = listener;
     proxy->idle_seconds = idle_seconds;
+    proxy->port = (unsigned)ntohs(address.sin_port);
     atomic_init(&proxy->running, true);
     snprintf(url, url_size, "http://127.0.0.1:%u" P1600_EWS_START_PAGE, (unsigned)ntohs(address.sin_port));
     if (pthread_create(&proxy->thread, NULL, serve, proxy) != 0) {
@@ -278,9 +376,8 @@ void p1600_ews_proxy_stop(P1600EwsProxy *proxy) {
     while (write(proxy->wake[1], &stop, 1) < 0 && errno == EINTR) {
     }
     if (!proxy->joined) pthread_join(proxy->thread, NULL);
-    close(proxy->listener);
+    /* serve() has closed the listener and the transport. */
     close(proxy->wake[0]);
     close(proxy->wake[1]);
-    if (proxy->transport.close) proxy->transport.close(proxy->transport.context);
     free(proxy);
 }
