@@ -179,7 +179,7 @@ OpenPrinting (The Linux Foundation) coordinates open-source CUPS and driver arch
 3. [ ] **Hardware Verification:** Physical test print verification over USB and network on HP LaserJet P1606dn (diagnostic page, the old stripe document, duplex, utility settings, notifications, AirPrint).
 4. [x] **Own Data:** The current tree has its own screens, tone curves and texts (section 1). The new screens still need a test print (item 3).
 4a. [x] **Clean History:** One root commit of the 6.0.0 tree in a newly created repository (October 2026); no published commit holds third-party tables, strings or logos (section 1).
-5. [ ] **Public Repository and Release:** `berkbb/p1600dn-macos-arm64-driver` (private, tagged `v6.0.1`) made public; no release assets were published.
-6. [ ] **Homebrew Integration:** Publish the 6.0.1 cask (`packaging/homebrew/`) to `berkbb/homebrew-tap` with the archive's SHA-256.
+5. [x] **Public Repository and Release:** `berkbb/p1600dn-macos-arm64-driver` is public (October 2026) with the tags `v6.0.0` and `v6.0.1`; no release assets were published.
+6. [x] **Homebrew Integration:** The 6.0.1 cask (`packaging/homebrew/`) is published in the public tap `berkbb/homebrew-tap` with the SHA-256 of the `v6.0.1` source archive (`brew install --cask berkbb/tap/p1600dn`). A new release needs a new tag, the new version and SHA-256 in `packaging/homebrew/Casks/p1600dn.rb`, and the same file in the tap.
 7. [ ] **OpenPrinting Registry:** Submit entry to OpenPrinting database as the native macOS ARM64 driver.
 8. [-] **PKG Build:** Not planned (October 2026); installation goes through the manager.
