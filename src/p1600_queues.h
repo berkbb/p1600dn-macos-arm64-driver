@@ -26,11 +26,23 @@ typedef struct {
  * unknown levels). */
 int p1600_queue_first_level(const char *marker_levels);
 
-/* True for printer-make-and-model strings of the P1600dn series drivers. */
+/* True for a driverless queue's make-and-model: macOS's "<model>-AirPrint"
+ * and CUPS's "<model> - IPP Everywhere". Such a queue prints over IPP, not
+ * through this driver; one made from this Mac's own AirPrint advertisement
+ * would otherwise be served by it again. */
+bool p1600_queue_is_driverless(const char *make_model);
+
+/* True for printer-make-and-model strings of the P1600dn series drivers
+ * (driverless queues of these printers are not). */
 bool p1600_queue_is_p1600dn(const char *make_model);
 
-/* Fills `queues` (up to `capacity`) with the P1600dn series queues; the
- * default queue first. Returns how many there are, or -1. */
+/* True when a CUPS printer-type value carries CUPS_PRINTER_DISCOVERED: a
+ * printer cupsGetDests() found over Bonjour, not a queue of this Mac. */
+bool p1600_queue_is_discovered(const char *printer_type);
+
+/* Fills `queues` (up to `capacity`) with the P1600dn series queues of this
+ * Mac (printers found over Bonjour are left out); the default queue first.
+ * Returns how many there are, or -1 when CUPS could not be asked. */
 int p1600_queue_list(P1600Queue *queues, int capacity);
 
 /* The queue with this name, or the default P1600dn queue for NULL/"".

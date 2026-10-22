@@ -236,8 +236,52 @@ static void test_english_localization(void) {
     puts("    [PASS] Status English and Turkish Localization Matrix");
 }
 
+/* Without a queue name the tool asks the P1600dn queues of this Mac only:
+ * not printers cupsGetDests() found over Bonjour (this Mac's own AirPrint
+ * advertisement among them), driverless queues or instances. */
+static void test_queue_selection(void) {
+    static const struct {
+        const char *name;
+        const char *instance;
+        const char *model;
+        const char *type;
+        int wanted;
+    } dests_in[] = {
+        {"Local_P1606dn", NULL, "HP LaserJet Professional P1600dn Series (Native ARM64)", "8392780", 1},
+        {"Local_P1606dn", "draft", "HP LaserJet Professional P1600dn Series (Native ARM64)", "8392780", 0},
+        {"Fak_lte_KirAir", NULL, "HP LaserJet Professional P1600dn Series (Native ARM64)", "16777220", 0},
+        {"Fak_lte_AirPrint", NULL, "HP LaserJet Professional P1600dn Series (Native ARM64)-AirPrint", "69243084", 0},
+        {"Old_P1606dn", NULL, "HP LaserJet Professional P1606dn", NULL, 1},
+        {"DeskJet", NULL, "HP DeskJet 3700 series", "8392780", 0},
+    };
+    cups_dest_t *dests = NULL;
+    int count = 0;
+    for (size_t i = 0; i < sizeof(dests_in) / sizeof(dests_in[0]); i++) {
+        count = cupsAddDest(dests_in[i].name, dests_in[i].instance, count, &dests);
+    }
+    for (size_t i = 0; i < sizeof(dests_in) / sizeof(dests_in[0]); i++) {
+        cups_dest_t *dest = cupsGetDest(dests_in[i].name, dests_in[i].instance, count, dests);
+        assert(dest != NULL);
+        dest->num_options = cupsAddOption("printer-make-and-model", dests_in[i].model, dest->num_options, &dest->options);
+        if (dests_in[i].type) {
+            dest->num_options = cupsAddOption("printer-type", dests_in[i].type, dest->num_options, &dest->options);
+        }
+    }
+    for (size_t i = 0; i < sizeof(dests_in) / sizeof(dests_in[0]); i++) {
+        const cups_dest_t *dest = cupsGetDest(dests_in[i].name, dests_in[i].instance, count, dests);
+        if (is_p1600dn_queue(dest) != dests_in[i].wanted) {
+            fprintf(stderr, "queue %s/%s: wanted %d\n", dests_in[i].name, dests_in[i].instance ? dests_in[i].instance : "",
+                    dests_in[i].wanted);
+            assert(0 && "wrong queue selection");
+        }
+    }
+    cupsFreeDests(count, dests);
+    puts("    [PASS] Queue Selection: Bonjour printers, driverless queues and instances left out");
+}
+
 int main(void) {
     puts("[*] Starting detailed status utility tests...");
+    test_queue_selection();
     test_connection_and_state_classification();
     test_complete_ipp_response();
     test_missing_and_partial_supplies();

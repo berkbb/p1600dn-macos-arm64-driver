@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "p1600_queues.h"
+
 #define STATUS_TIMEOUT_MS 5000
 
 typedef enum {
@@ -269,6 +271,19 @@ static int query_queue(const char *queue_name) {
     return query_succeeded;
 }
 
+/* A P1600dn series queue of this Mac: not an instance, not a printer
+ * cupsGetDests() found over Bonjour (this Mac's own AirPrint advertisement
+ * among them) and not a driverless queue (p1600_queues.h). */
+static int is_p1600dn_queue(const cups_dest_t *dest) {
+    const char *model = cupsGetOption("printer-make-and-model", dest->num_options, dest->options);
+    if (dest->instance || !model || p1600_queue_is_driverless(model) ||
+        p1600_queue_is_discovered(cupsGetOption("printer-type", dest->num_options, dest->options))) {
+        return 0;
+    }
+    return strcasestr(model, "P1606dn") || strcasestr(model, "Professional_P1606dn") || strcasestr(model, "P1600") ||
+           strcasestr(model, "P1607") || strcasestr(model, "P1608") || strcasestr(model, "P1609");
+}
+
 static int query_all_queues(void) {
     cups_dest_t *dests = NULL;
     int count = cupsGetDests(&dests);
@@ -276,13 +291,7 @@ static int query_all_queues(void) {
     int queried = 0;
 
     for (int i = 0; i < count; i++) {
-        const char *model = cupsGetOption("printer-make-and-model", dests[i].num_options, dests[i].options);
-        if (model && (strcasestr(model, "P1606dn") ||
-                      strcasestr(model, "Professional_P1606dn") ||
-                      strcasestr(model, "P1600") ||
-                      strcasestr(model, "P1607") ||
-                      strcasestr(model, "P1608") ||
-                      strcasestr(model, "P1609"))) {
+        if (is_p1600dn_queue(&dests[i])) {
             found++;
             queried += query_queue(dests[i].name);
         }

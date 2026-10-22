@@ -133,8 +133,8 @@ airprint: $(AIRPRINT_TARGET)
 
 utility-app: $(UTILITY_APP_STAMP)
 
-$(STATUS_TARGET): $(SRC_DIR)/p1600dn_status.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< $(LDFLAGS) -o $@
+$(STATUS_TARGET): $(SRC_DIR)/p1600dn_status.c $(SRC_DIR)/p1600_queues.c $(SRC_DIR)/p1600_queues.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(SRC_DIR)/p1600dn_status.c $(SRC_DIR)/p1600_queues.c $(LDFLAGS) -o $@
 	$(SIGN)
 	@echo "Built printer status utility: $(STATUS_TARGET)"
 
@@ -229,7 +229,7 @@ test-ppd:
 	@$(MANAGER) --test-ppds
 
 test-status: $(STATUS_TARGET)
-	$(CC) $(CFLAGS) $(TEST_DIR)/test_status.c -lcups $(ARCH_FLAGS) -o $(STATUS_TEST_TARGET)
+	$(CC) $(CFLAGS) $(TEST_DIR)/test_status.c $(SRC_DIR)/p1600_queues.c -lcups $(ARCH_FLAGS) -o $(STATUS_TEST_TARGET)
 	@$(STATUS_TEST_TARGET)
 	@$(MANAGER) --test-status ./$(STATUS_TARGET)
 
@@ -265,7 +265,7 @@ test-sanitize: $(SCREEN_TABLES) | $(BUILD_DIR)
 	@$(BUILD_DIR)/test_utility_sanitize ./$(BUILD_DIR)/p1600dn-utility_sanitize
 	$(CC) $(SANITIZER_FLAGS) $(TEST_DIR)/test_transport.c $(TRANSPORT_SRCS) -lcups $(USB_LIBS) -o $(BUILD_DIR)/test_transport_sanitize
 	@$(BUILD_DIR)/test_transport_sanitize
-	$(CC) $(SANITIZER_FLAGS) $(TEST_DIR)/test_status.c -lcups -o $(BUILD_DIR)/test_status_sanitize
+	$(CC) $(SANITIZER_FLAGS) $(TEST_DIR)/test_status.c $(SRC_DIR)/p1600_queues.c -lcups -o $(BUILD_DIR)/test_status_sanitize
 	@$(BUILD_DIR)/test_status_sanitize
 	@echo "[*] ThreadSanitizer: encoder pool, writer thread and printer status reader"
 	$(CC) $(THREAD_SANITIZER_FLAGS) $(SRCS) -lcups -o $(BUILD_DIR)/rastertop1600dn_tsan
@@ -347,7 +347,7 @@ coverage: $(SCREEN_TABLES) | $(BUILD_DIR)
 	@P1600DN_PIPELINE_WORKDIR='$(abspath $(COVERAGE_DIR))' LLVM_PROFILE_FILE='cups-pipeline-%p.profraw' \
 		$(abspath $(TEST_DIR))/test_cups_pipeline.sh $(abspath $(COVERAGE_DIR))/filter \
 		$(abspath $(COVERAGE_DIR))/test_cups_pipeline >/dev/null
-	$(CC) $(COVERAGE_FLAGS) $(TEST_DIR)/test_status.c -lcups -o $(COVERAGE_DIR)/test_status
+	$(CC) $(COVERAGE_FLAGS) $(TEST_DIR)/test_status.c $(SRC_DIR)/p1600_queues.c -lcups -o $(COVERAGE_DIR)/test_status
 	@LLVM_PROFILE_FILE='$(COVERAGE_DIR)/status-%p.profraw' $(COVERAGE_DIR)/test_status >/dev/null
 	$(CC) $(COVERAGE_FLAGS) $(TEST_DIR)/test_encoder_pool.c $(POOL_SRCS) $(ENCODER_SRCS) -lcups -o $(COVERAGE_DIR)/test_encoder_pool
 	@LLVM_PROFILE_FILE='$(COVERAGE_DIR)/pool-%p.profraw' $(COVERAGE_DIR)/test_encoder_pool $(COVERAGE_DIR)/filter >/dev/null

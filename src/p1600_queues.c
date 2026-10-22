@@ -6,13 +6,28 @@
 #include <strings.h>
 #include <cups/cups.h>
 
+bool p1600_queue_is_driverless(const char *make_model) {
+    static const char airprint[] = "-AirPrint";
+    if (!make_model) return false;
+    size_t length = strlen(make_model);
+    return (length >= sizeof(airprint) - 1U && strcasecmp(make_model + length - (sizeof(airprint) - 1U), airprint) == 0) ||
+           strcasestr(make_model, "IPP Everywhere") != NULL;
+}
+
 bool p1600_queue_is_p1600dn(const char *make_model) {
     static const char *const models[] = {"P1600dn", "P1606dn", "P1607dn", "P1608dn", "P1609dn"};
-    if (!make_model) return false;
+    if (!make_model || p1600_queue_is_driverless(make_model)) return false;
     for (size_t i = 0; i < sizeof(models) / sizeof(models[0]); i++) {
         if (strcasestr(make_model, models[i])) return true;
     }
     return false;
+}
+
+bool p1600_queue_is_discovered(const char *printer_type) {
+    if (!printer_type || !*printer_type) return false;
+    char *end = NULL;
+    unsigned long type = strtoul(printer_type, &end, 10);
+    return end != printer_type && (type & CUPS_PRINTER_DISCOVERED) != 0;
 }
 
 int p1600_queue_first_level(const char *marker_levels) {
@@ -44,6 +59,7 @@ int p1600_queue_list(P1600Queue *queues, int capacity) {
     if (!queues || capacity < 0) return -1;
     cups_dest_t *dests = NULL;
     int count = cupsGetDests(&dests);
+    ipp_status_t status = cupsLastError();
     int found = 0;
     /* The default queue first, then the others in CUPS order. */
     for (int pass = 0; pass < 2; pass++) {
@@ -52,11 +68,19 @@ int p1600_queue_list(P1600Queue *queues, int capacity) {
             if (dest->instance || (pass == 0) != (dest->is_default != 0)) continue;
             const char *make_model = cupsGetOption("printer-make-and-model", dest->num_options, dest->options);
             if (!p1600_queue_is_p1600dn(make_model)) continue;
+            /* Printers found over Bonjour are not queues of this Mac; among
+             * them is this Mac's own AirPrint advertisement. */
+            if (p1600_queue_is_discovered(cupsGetOption("printer-type", dest->num_options, dest->options))) continue;
             if (found < capacity) fill(&queues[found], dest);
             found++;
         }
     }
     cupsFreeDests(count, dests);
+    /* cupsGetDests() gives no queues both when cupsd has none (it answers
+     * client-error-not-found) and when it could not be asked: only the
+     * first is an empty list (a watcher must not take a hiccup of cupsd for
+     * removed queues). */
+    if (found == 0 && status > IPP_STATUS_OK_EVENTS_COMPLETE && status != IPP_STATUS_ERROR_NOT_FOUND) return -1;
     return found;
 }
 
