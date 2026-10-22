@@ -138,7 +138,7 @@ The manager automatically checks for Xcode Command Line Tools, launching `xcode-
 Get the sources on the other Mac with `git clone` or `git pull`, or copy the folder without `build/`, then run `--install` there. The driver and both apps are always built on the Mac they run on:
 
 ```bash
-cd p1600dn-macos-driver && rm -rf build && ./p1600dn_manager.command --install
+cd p1600dn-macos-arm64-driver && rm -rf build && ./p1600dn_manager.command --install
 ```
 
 Do not copy `build/` or the installed apps from one Mac to another. The apps are signed ad hoc on the Mac that built them, and AirDrop, USB drives, cloud folders or zip archives can drop files from the bundle or add `._` files to it. That breaks the signature, so the copied app shows the following:
@@ -334,7 +334,7 @@ Its package receipts are forgotten and its driver, filters, PPDs and tools are d
 ## Project Structure
 
 ```text
-p1600dn-macos-driver/
+p1600dn-macos-arm64-driver/
 ├── assets/                               Printer icon for the PPD and AirPrint (.icns, .png), app icon (.icns)
 ├── build/                                Output build artifacts (object files, binaries)
 ├── ppd/
