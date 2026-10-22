@@ -118,7 +118,17 @@ The real macOS `cgtexttopdf` -> `cgpdftoraster` pipeline is executed across simp
 
 ## Installation
 
-The recommended method is double-clicking `p1600dn_manager.command` in Finder and selecting **Option 1**.
+### Homebrew
+
+```bash
+brew install --cask berkbb/tap/p1600dn
+```
+
+The cask lives in the tap repository [berkbb/homebrew-tap](https://github.com/berkbb/homebrew-tap) (`Casks/p1600dn.rb`; its source is `packaging/homebrew/` here). It downloads this repository's latest release, checks its SHA-256, and runs `p1600dn_manager.command --install`, so the driver is built and tested on your Mac first. `brew uninstall --cask p1600dn` runs `--uninstall --yes`.
+
+### Manager
+
+The recommended method without Homebrew is double-clicking `p1600dn_manager.command` in Finder and selecting **Option 1**.
 
 Command-line alternative:
 ```bash
