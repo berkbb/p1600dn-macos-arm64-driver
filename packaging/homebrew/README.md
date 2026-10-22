@@ -11,7 +11,7 @@ Requirements:
 - Xcode Command Line Tools with `clang`, `make` and `python3` (Homebrew already needs them).
 
 > [!NOTE]
-> The cask expects a public `berkbb/p1600dn-macos-driver` repository (public) with a `v6.0.0` tag, and this tap as `berkbb/homebrew-tap`. The repository is private and the tap does not exist yet; see `DISTRIBUTION_GUIDE.md`, section 5.
+> The cask expects a public `berkbb/p1600dn-macos-driver` repository (public) with a `v6.0.1` tag, and this tap as `berkbb/homebrew-tap`. The repository is private and the tap does not exist yet; see `DISTRIBUTION_GUIDE.md`, section 5.
 
 ---
 

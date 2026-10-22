@@ -79,20 +79,20 @@ An **Apple Notarized `.pkg`** installer is the usual way to ship macOS drivers t
    ```bash
    pkgbuild --root pkg_root \
             --identifier com.berkbb.pkg.p1600dn \
-            --version 6.0.0 \
+            --version 6.0.1 \
             --install-location / \
             --sign "Developer ID Installer: Full Name (TEAM_ID)" \
-            P1600dn-Driver-v6.0.0.pkg
+            P1600dn-Driver-v6.0.1.pkg
    ```
 3. **Submit to Apple Notarization (`notarytool`):**
    ```bash
-   xcrun notarytool submit P1600dn-Driver-v6.0.0.pkg \
+   xcrun notarytool submit P1600dn-Driver-v6.0.1.pkg \
                     --keychain-profile "AC_PASSWORD" \
                     --wait
    ```
 4. **Staple Ticket (`stapler`):**
    ```bash
-   xcrun stapler staple P1600dn-Driver-v6.0.0.pkg
+   xcrun stapler staple P1600dn-Driver-v6.0.1.pkg
    ```
 
 ---
@@ -105,7 +105,7 @@ Homebrew is the standard package manager for macOS developers and power users.
 
 - Standard `homebrew-core` formulae are restricted to non-root userland tools.
 - Printer drivers install to root system locations (`/Library/Printers/` and CUPS directories), requiring Homebrew **Cask** packaging.
-- The cask (`packaging/homebrew/Casks/p1600dn.rb`, version 6.0.0) has no `.pkg`. It downloads the release's source archive, runs `p1600dn_manager.command --install` with `sudo`, and `--uninstall --yes` on `brew uninstall`. It passes `brew style` and `brew audit --cask --strict` (checked in a temporary local tap).
+- The cask (`packaging/homebrew/Casks/p1600dn.rb`, version 6.0.1) has no `.pkg`. It downloads the release's source archive, runs `p1600dn_manager.command --install` with `sudo`, and `--uninstall --yes` on `brew uninstall`. It passes `brew style` and `brew audit --cask --strict` (checked in a temporary local tap).
 
 ### 3.2 Method A: Official Homebrew Cask
 
@@ -125,7 +125,7 @@ Included tap assets in this repository:
 1. Create a public GitHub repository named **`homebrew-tap`**.
    _(Homebrew naming convention requires `homebrew-<name>`; `homebrew-tap` enables the clean `berkbb/tap` shorthand)._
 2. Upload the files from `packaging/homebrew/` to that repository (`Casks/p1600dn.rb`).
-3. Make `berkbb/p1600dn-macos-driver` public with the tag `v6.0.0` (check section 1 first), and put the SHA-256 of `https://github.com/berkbb/p1600dn-macos-driver/archive/refs/tags/v6.0.0.tar.gz` into the cask in place of `:no_check`.
+3. Make `berkbb/p1600dn-macos-driver` public with the tag `v6.0.1` (check section 1 first), and put the SHA-256 of `https://github.com/berkbb/p1600dn-macos-driver/archive/refs/tags/v6.0.1.tar.gz` into the cask in place of `:no_check`.
 4. Users anywhere can now install the driver with a single command:
    ```bash
    brew install --cask berkbb/tap/p1600dn
@@ -174,12 +174,12 @@ OpenPrinting (The Linux Foundation) coordinates open-source CUPS and driver arch
 
 ## 5. Step-by-Step Distribution Checklist
 
-1. [x] **Coding & Unit Tests:** 6.0.0 passes `make test` (241 checks), the sanitizers, Guard Malloc and the static analyzer.
+1. [x] **Coding & Unit Tests:** 6.0.1 passes `make test` (263 checks), the sanitizers, Guard Malloc and the static analyzer.
 2. [x] **PPD Conformance:** 0 errors and 0 warnings under `cupstestppd -W all`.
 3. [ ] **Hardware Verification:** Physical test print verification over USB and network on HP LaserJet P1606dn (diagnostic page, the old stripe document, duplex, utility settings, notifications, AirPrint).
 4. [x] **Own Data:** The current tree has its own screens, tone curves and texts (section 1). The new screens still need a test print (item 3).
 4a. [x] **Clean History:** One root commit of the 6.0.0 tree in a newly created repository (October 2026); no published commit holds third-party tables, strings or logos (section 1).
-5. [ ] **Public Repository and Release:** `berkbb/p1600dn-macos-driver` (private, tagged `v6.0.0`) made public; no release assets were published.
-6. [ ] **Homebrew Integration:** Publish the 6.0.0 cask (`packaging/homebrew/`) to `berkbb/homebrew-tap` with the archive's SHA-256.
+5. [ ] **Public Repository and Release:** `berkbb/p1600dn-macos-driver` (private, tagged `v6.0.1`) made public; no release assets were published.
+6. [ ] **Homebrew Integration:** Publish the 6.0.1 cask (`packaging/homebrew/`) to `berkbb/homebrew-tap` with the archive's SHA-256.
 7. [ ] **OpenPrinting Registry:** Submit entry to OpenPrinting database as the native macOS ARM64 driver.
 8. [-] **PKG Build:** Not planned (October 2026); installation goes through the manager.

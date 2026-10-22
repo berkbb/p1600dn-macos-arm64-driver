@@ -217,14 +217,14 @@ test_p1606dn_ppd() (
     local paper_choices=(Letter Legal A4 Executive FanFoldGermanLegal A5 A6 B5 195x270mm 184x260mm 197x273mm Postcard DoublePostcard Env10 EnvMonarch EnvISOB5 EnvC5 EnvDL)
     local envelopes=(Env10 EnvMonarch EnvISOB5 EnvC5 EnvDL)
     [ -f "$ppd" ] || fail "Missing HP LaserJet Pro P1606dn PPD"
-    grep -Fqx '*FileVersion: "6.0.0"' "$ppd" || fail "Wrong PPD version"
+    grep -Fqx '*FileVersion: "6.0.1"' "$ppd" || fail "Wrong PPD version"
     # The PPD's version is the driver's: the diagnostic page, the PAPPL app
     # and both apps must carry the same one.
-    grep -Fq '#define P1600_DRIVER_VERSION "6.0.0"' "$DRIVER_DIR/src/p1600_diagnostic.h" || fail "Diagnostic page version differs from the PPD"
-    grep -Fqx '        "6.0.0",' "$DRIVER_DIR/src/pappl_p1600dn.c" || fail "PAPPL app version differs from the PPD"
+    grep -Fq '#define P1600_DRIVER_VERSION "6.0.1"' "$DRIVER_DIR/src/p1600_diagnostic.h" || fail "Diagnostic page version differs from the PPD"
+    grep -Fqx '        "6.0.1",' "$DRIVER_DIR/src/pappl_p1600dn.c" || fail "PAPPL app version differs from the PPD"
     for plist in "$DRIVER_DIR/utility/Info.plist" "$DRIVER_DIR/notifier/Info.plist"; do
-        [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" = "6.0.0" ] &&
-            [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" = "6.0.0" ] ||
+        [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" = "6.0.1" ] &&
+            [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" = "6.0.1" ] ||
             fail "App version differs from the PPD: $plist"
     done
     grep -Fqx '*cupsVersion: "1.6"' "$ppd" || fail "Unsupported CUPS PPD extension version"

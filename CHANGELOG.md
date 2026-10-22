@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [6.0.1] - 2026-10-22
+
+Fixes ported from the driver 5.1.1 line, with tests. The PPD, the apps, the diagnostic page, the PAPPL app, the manager's version check and the Homebrew cask carry 6.0.1.
+
 ### Fixed
 - Opening **Options & Supplies** or the utility no longer queues a toner query job again and again: the PPD's `*cupsCommands` no longer lists `ReportLevels`. The notifier still asks for the toner level after printing, and `commandtop1600dn` still answers `ReportLevels`.
 - The AirPrint server no longer restarts every 60 seconds on its own advertisement: printers `cupsGetDests()` finds over Bonjour and driverless queues (`<model>-AirPrint`, `IPP Everywhere`) are no longer P1600dn queues, also in the utility, the notifier and `p1600dn-status`. A moment without cupsd is reported as an error instead of "no queues".
@@ -22,6 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Tests: UBSan errors stop `make test-sanitize`, which now builds what it runs; the `--self-test` source checks can fail; the test PPDs name the filter through a short link, so `make test` works from long folder paths; each CLI action and alias is checked alone.
 
 ### Changed
+- **License: GPL-3.0-or-later** (was GPL-2.0-or-later): `LICENSE` holds the GNU GPL version 3 text, and the SPDX identifiers, the apps' copyright, `README.md`, `NOTICE` and the distribution guide say so. JBIG-KIT stays GPL-2.0-or-later, which allows its use under GPL-3.0.
+- The manager's titles, the Homebrew cask and the PAPPL app are named "P1600dn Series" instead of carrying HP's name as if HP made them; HP's printer names remain where they identify the supported printers.
+- The utility's and the notifier's copyright (`NSHumanReadableCopyright`, shown in Finder's Get Info) name the author, berkbb, instead of describing the apps as HP's.
 - `README.md` and `DEVELOPMENT.md`: the PAPPL adapter is an unfinished draft that cannot print; engine error notices appear at once; where ReportLevels comes from.
 
 ## [6.0.0] - 2026-10-16

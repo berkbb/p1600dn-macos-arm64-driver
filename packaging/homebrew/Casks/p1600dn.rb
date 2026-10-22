@@ -1,6 +1,6 @@
 cask "p1600dn" do
-  version "6.0.0"
-  sha256 :no_check # set to the release archive's SHA-256 once v6.0.0 is published
+  version "6.0.1"
+  sha256 :no_check # set to the release archive's SHA-256 once v6.0.1 is published
 
   # There is no .pkg: the driver installs the way the manager installs it.
   # It builds the driver from the source archive, runs every test and installs

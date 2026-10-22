@@ -20,7 +20,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define P1600_DRIVER_VERSION "6.0.0"
+#define P1600_DRIVER_VERSION "6.0.1"
 
 typedef enum {
     P1600_SIDES_ONE = 0,
