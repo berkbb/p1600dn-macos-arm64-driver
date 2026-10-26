@@ -395,10 +395,15 @@ p1600dn-macos-arm64-driver/
 ├── LICENSE                               GPL-3.0-or-later license
 ├── Makefile                              Native ARM64 build and test harness
 ├── NOTICE                                Attribution and copyright notice
-└── README.md                             User guide and documentation
+├── README.md                             User guide and documentation
+└── SECURITY.md                           Security policy and private vulnerability reporting
 ```
 
 ---
+
+## Security
+
+Please report vulnerabilities privately through the repository's **Security** tab (**Report a vulnerability**), not in a public issue. `SECURITY.md` lists the supported versions and what is in scope; the security fixes of each release are in the **Security** section of `CHANGELOG.md`.
 
 ## License
 
