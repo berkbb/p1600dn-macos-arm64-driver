@@ -139,7 +139,7 @@ int main(int argc, char *argv[]) {
 
     return papplMainloop(
         argc, argv,
-        "6.0.1",
+        "6.0.2",
         "P1600dn Series Printer Application",
         (int)(sizeof(drivers)/sizeof(drivers[0]) - 1),
         drivers,

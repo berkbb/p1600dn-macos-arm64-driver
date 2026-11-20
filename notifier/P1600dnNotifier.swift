@@ -3,8 +3,11 @@
 // paper, paper jams, open doors, "load paper / turn the stack and press Go"
 // for manual feed and manual duplex (the PPD's localized text, which the
 // driver writes to printer-state-message), engine errors, and toner low,
-// very low, empty and replaced. The decisions are made by the C core
-// (src/p1600_notify.c); this file watches the queues and shows the notices.
+// very low, empty and replaced. A state must last its settle time to be
+// shown (the printer takes a retried pickup back within seconds), and a
+// notice is withdrawn when its state clears. The decisions are made by the
+// C core (src/p1600_notify.c); this file watches the queues and shows the
+// notices.
 //
 // P1600dn Bildirim Aracı: sürücünün cupsd'ye bildirdiği yazıcı durumunu
 // (kağıt bitti, sıkışma, kapak açık, elle besleme/çift taraflı, toner)
@@ -418,6 +421,8 @@ final class Agent: NSObject, UNUserNotificationCenterDelegate {
     private var memory: Memory!
     private var last: [String: P1600PrinterSnapshot] = [:]
     private var tentative: [String: [String: TimeInterval]] = [:]
+    private var shown: [String: Set<String>] = [:]     // attention reasons shown in this run, per queue
+    private var carried: [String: Set<String>] = [:]   // reported before this start (memory), per queue
     private var posted = 0
     private var stopping = false
     private var logHandle: FileHandle?
@@ -516,13 +521,14 @@ final class Agent: NSObject, UNUserNotificationCenterDelegate {
         let reported = memory.reasons(queue)
         let info = cText(after.info)
         let title = info.isEmpty ? queue : info
-        let settle = TimeInterval(P1600_NOTIFY_SETTLE_SECONDS)
 
         // The first observation only primes p1600_notify_compare(); a toner
-        // level that fell while this agent was not watching still counts.
+        // level that fell while this agent was not watching still counts,
+        // and the reasons reported before this start may still be shown.
         var primed = P1600Notice()
-        if !before.has_data && p1600_notify_prime_toner(remembered, &after, &primed) != 0 {
-            post(primed, queue: queue, title: title)
+        if !before.has_data {
+            carried[queue] = Set(reported.split(separator: ",").map(String.init))
+            if p1600_notify_prime_toner(remembered, &after, &primed) != 0 { post(primed, queue: queue, title: title) }
         }
 
         for index in 0..<count {
@@ -533,6 +539,7 @@ final class Agent: NSObject, UNUserNotificationCenterDelegate {
                 // Reported before this start and still there.
                 if !before.has_data && p1600_notify_reason_listed(reported, reason) { continue }
                 if notice.tentative {
+                    let settle = TimeInterval(p1600_notify_settle_seconds(reason))
                     tentative[queue, default: [:]][reason] = monotonic() + settle
                     watcher.snapshot(after: settle)
                     continue
@@ -557,6 +564,18 @@ final class Agent: NSObject, UNUserNotificationCenterDelegate {
             tentative[queue] = pending.isEmpty ? nil : pending
         }
 
+        // A state that cleared no longer needs attention: its notice, shown
+        // in this run or before it, leaves Notification Center.
+        var cleared = [CChar](repeating: 0, count: 256)
+        p1600_notify_cleared_reasons(&before, &after, &cleared, cleared.count)
+        for reason in String(cString: cleared).split(separator: ",").map(String.init) {
+            let wasShown = shown[queue]?.contains(reason) ?? false
+            let wasCarried = carried[queue]?.contains(reason) ?? false
+            shown[queue]?.remove(reason)
+            carried[queue]?.remove(reason)
+            if wasShown || wasCarried { withdraw(reason: reason, queue: queue, title: title) }
+        }
+
         var active = [CChar](repeating: 0, count: 256)
         p1600_notify_active_reasons(&after, &active, active.count)
         memory.update(queue, bucket: p1600_notify_remember(remembered, &after),
@@ -578,6 +597,7 @@ final class Agent: NSObject, UNUserNotificationCenterDelegate {
     private func show(name: String, queue: String, title: String, body: String, identifier: String, sound: Bool) {
         guard !stopping else { return }
         posted += 1
+        if name.hasPrefix("attention.") { shown[queue, default: []].insert(String(name.dropFirst("attention.".count))) }
         if let handle = logHandle {
             let fields = [name, queue, title, body].map {
                 $0.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ")
@@ -600,6 +620,22 @@ final class Agent: NSObject, UNUserNotificationCenterDelegate {
             stopping = true
             DispatchQueue.main.async { self.shutdown() }
         }
+    }
+
+    /// Takes an attention notice out of Notification Center: its state is
+    /// gone. In the test log it is one line without a body.
+    private func withdraw(reason: String, queue: String, title: String) {
+        guard !stopping else { return }
+        let name = "withdrawn.attention." + reason
+        if let handle = logHandle {
+            let fields = [name, queue, title, ""].map {
+                $0.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ")
+            }
+            handle.write(Data((fields.joined(separator: "\t") + "\n").utf8))
+        } else {
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["\(queue).attention.\(reason)"])
+        }
+        log.info("\(name, privacy: .public) for \(queue, privacy: .public)")
     }
 
     /// Ends the subscriptions (the watcher threads may be in a long poll)

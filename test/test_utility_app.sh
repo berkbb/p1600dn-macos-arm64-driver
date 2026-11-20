@@ -32,7 +32,7 @@ for language in en da de es fi fr it ko nl no pt sv zh_CN zh_TW tr ro; do
     /usr/bin/plutil -lint "$file" >/dev/null || fail "Invalid $file"
     count=$((count + 1))
 done
-python="${PYTHON:-/opt/homebrew/bin/python3}"
+python="${PYTHON:-/opt/homebrew/opt/python@3/libexec/bin/python3}"
 [ -x "$python" ] || python=/usr/bin/python3
 # Every language has English's keys, and English has every key the window
 # asks for: the ownText("...") literals and the duration keys of both menus.

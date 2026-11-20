@@ -4,7 +4,8 @@
 # same Notifier.strings keys in all 15 languages, and its LaunchAgent plist.
 # In a logged-in GUI session (not as root) it then runs the agent against a
 # stand-in cupsd (test/test_notify.c --serve) that scripts the printer: out
-# of paper with the PPD's text, toner 40 -> 12 -> 4 -> 0 (the last through the
+# of paper with the PPD's text (shown after the settle time, withdrawn when
+# paper is loaded), toner 40 -> 12 -> 4 -> 0 (the last through the
 # ReportLevels job the agent sends after a finished job), manual duplex with
 # the PPD's text, and a restart that must not repeat what was already shown. The
 # notices go to a log file (P1600DN_NOTIFIER_LOG); Notification Center and
@@ -131,6 +132,7 @@ run_agent main en 5
 grep -q '^steps=ok cancel=ok reportlevels=ok jobs=1$' "$work/main.serve" || fail "Stand-in: $(cat "$work/main.serve")"
 tab=$'\t'
 expected="attention.media-empty$tab$queue$tab$title${tab}Out of Paper: Refill the paper tray, then press Go on the printer.
+withdrawn.attention.media-empty$tab$queue$tab$title$tab
 toner.low$tab$queue$tab$title$tab$(printf "$(text en Toner-low)" 12)
 toner.very-low$tab$queue$tab$title$tab$(printf "$(text en Toner-very-low)" 4)
 toner.empty$tab$queue$tab$title$tab$(text en Toner-empty)
@@ -139,14 +141,17 @@ expect_log "$work/main.log" "$expected"
 [ "$(/usr/bin/plutil -extract "Queues.$queue.TonerBucket" raw -o - "$work/state.plist")" = "3" ] || fail "Toner bucket not remembered"
 [ "$(/usr/bin/plutil -extract "Queues.$queue.Reasons" raw -o - "$work/state.plist")" = "media-needed" ] ||
     fail "Reported reasons not remembered"
-echo "    [PASS] Agent run: out-of-paper text, toner low/very low/empty (ReportLevels after a job), manual duplex text, no duplicates"
+echo "    [PASS] Agent run: out-of-paper text after the settle time, withdrawn when paper is loaded, toner low/very low/empty (ReportLevels after a job), manual duplex text, no duplicates"
 
 # Restarted: the waiting stack and the empty cartridge were shown before.
-# A backend connecting for 2 s stays quiet; an unreachable printer is shown
-# after the settle time.
+# The jam is shown after its settle time; when the printer connects, the jam
+# and the stack (from before the restart) are withdrawn. A backend connecting
+# for 2 s stays quiet; an unreachable printer is shown after the settle time.
 run_agent persist tr 2
 grep -q '^steps=ok cancel=ok' "$work/persist.serve" || fail "Stand-in: $(cat "$work/persist.serve")"
 expected="attention.media-jam$tab$queue$tab$title$tab$(text tr Reason-media-jam)
+withdrawn.attention.media-jam$tab$queue$tab$title$tab
+withdrawn.attention.media-needed$tab$queue$tab$title$tab
 attention.connecting-to-device$tab$queue$tab$title${tab}The printer is unreachable at this time."
 expect_log "$work/persist.log" "$expected"
-echo "    [PASS] Agent restart: nothing repeated, jam in Turkish, brief connecting quiet, unreachable shown after settling"
+echo "    [PASS] Agent restart: nothing repeated, jam in Turkish after settling, jam and stack withdrawn, brief connecting quiet, unreachable shown after settling"

@@ -124,7 +124,8 @@ int p1600_notify_compare(const P1600PrinterSnapshot *before, const P1600PrinterS
         has_reason(after, base, &error_form);
         P1600Notice *notice = add_notice(notices, &count, P1600_NOTICE_ATTENTION, after->toner);
         copy_line(notice->reason, sizeof(notice->reason), base);
-        notice->tentative = strcmp(base, "connecting-to-device") == 0 && !error_form;
+        /* Only an engine error is shown at once; the rest must last. */
+        notice->tentative = !(strcmp(base, "connecting-to-device") == 0 && error_form);
         /* The driver reports its reasons in the -error form together with
          * the PPD's text, so the message belongs to such a reason. */
         if (message_target < 0 && error_form) message_target = count - 1;
@@ -209,22 +210,49 @@ P1600TonerBucket p1600_notify_remember(P1600TonerBucket remembered, const P1600P
     return bucket != P1600_TONER_UNKNOWN ? bucket : valid_bucket(remembered);
 }
 
+/* Appends `reason` to the list in `out`; false (and an empty list) when it
+ * does not fit. */
+static bool append_reason(char *out, size_t size, size_t *length, const char *reason) {
+    size_t needed = strlen(reason) + (*length > 0 ? 1U : 0U);
+    if (*length + needed >= size) {
+        out[0] = '\0';
+        *length = 0;
+        return false;
+    }
+    if (*length > 0) out[(*length)++] = ',';
+    strcpy(out + *length, reason);
+    *length += strlen(reason);
+    return true;
+}
+
 size_t p1600_notify_active_reasons(const P1600PrinterSnapshot *snapshot, char *out, size_t size) {
     if (!out || size == 0) return 0;
     out[0] = '\0';
     size_t length = 0;
     for (size_t i = 0; i < sizeof(interesting_reasons) / sizeof(interesting_reasons[0]); i++) {
         if (!p1600_notify_attention_active(snapshot, interesting_reasons[i])) continue;
-        size_t needed = strlen(interesting_reasons[i]) + (length > 0 ? 1U : 0U);
-        if (length + needed >= size) {
-            out[0] = '\0';
-            return 0;
-        }
-        if (length > 0) out[length++] = ',';
-        strcpy(out + length, interesting_reasons[i]);
-        length += strlen(interesting_reasons[i]);
+        if (!append_reason(out, size, &length, interesting_reasons[i])) return 0;
     }
     return length;
+}
+
+size_t p1600_notify_cleared_reasons(const P1600PrinterSnapshot *before, const P1600PrinterSnapshot *after, char *out,
+                                    size_t size) {
+    if (!out || size == 0) return 0;
+    out[0] = '\0';
+    if (!before || !after || !before->has_data || !after->has_data) return 0;
+    size_t length = 0;
+    for (size_t i = 0; i < sizeof(interesting_reasons) / sizeof(interesting_reasons[0]); i++) {
+        const char *reason = interesting_reasons[i];
+        if (!p1600_notify_attention_active(before, reason) || p1600_notify_attention_active(after, reason)) continue;
+        if (!append_reason(out, size, &length, reason)) return 0;
+    }
+    return length;
+}
+
+int p1600_notify_settle_seconds(const char *base) {
+    return base && strcmp(base, "connecting-to-device") == 0 ? P1600_NOTIFY_SETTLE_SECONDS
+                                                             : P1600_NOTIFY_ATTENTION_SETTLE_SECONDS;
 }
 
 bool p1600_notify_reason_listed(const char *list, const char *base) {

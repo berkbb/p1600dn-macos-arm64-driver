@@ -5,8 +5,10 @@
  * Printer status reporting: the job asks for PJL USTATUS, a reader thread
  * parses the replies the printer sends back over the CUPS backchannel, and
  * device codes become printer-state-reasons plus the localized texts of the
- * PPD's cupsIPPReason entries. The page progress line
- * (`INFO: Printing Page n, p% Complete...`) is produced here as well.
+ * PPD's cupsIPPReason entries. When the printer reports the job finished,
+ * those reasons are cleared again (see p1600_status_format_job_end()). The
+ * page progress line (`INFO: Printing Page n, p% Complete...`) is produced
+ * here as well.
  * See reference/zjstream/ZJS_STREAM_SPEC.md, section 6.
  */
 
@@ -71,6 +73,20 @@ const P1600StatusCode *p1600_status_code_lookup(int code);
 /* Formats the CUPS stderr lines for a device status code into `out`
  * (empty for codes that are not reported). Returns the length written. */
 size_t p1600_status_format_code(const P1600StatusTexts *texts, int code, char *out, size_t size);
+
+/* The printer's "ready" code: its lines remove every reason of the table and
+ * set the PPD's PrinterReady text. */
+#define P1600_STATUS_READY_CODE 10001
+
+/* The lines for a job the printer reports finished (USTATUS JOB END): those
+ * of P1600_STATUS_READY_CODE. The printer says "ready" only after JOB END,
+ * when the reader has stopped listening, so a state it reported during the
+ * job and took back on its own, such as the out-of-paper-or-misfeed and
+ * feed-delay codes of a pickup it retried, would stay on the queue: cupsd
+ * keeps printer-state-reasons and the message in printers.conf, across
+ * restarts, until a later job's status clears them. A canceled job keeps
+ * its state. Returns the length written. */
+size_t p1600_status_format_job_end(const P1600StatusTexts *texts, char *out, size_t size);
 
 /* Progress is printed after line `line_index` (0-based) of a page with
  * `total` lines when (total - line_index - 1) % 256 == 0. */

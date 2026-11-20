@@ -158,6 +158,7 @@ sheet is out.
   - 15 s after the job data when the printer has not answered at all.
   - 10 min after the last message otherwise. This leaves time to turn a manual-duplex stack.
   - It also ends when the backend closes the backchannel.
+- **Job end clearing:** `USTATUS JOB END` also writes the lines of code 10001 (`p1600_status_format_job_end()`). The printer's own ready code comes after JOB END, when the reader has stopped, so a code it took back during the job (41002–41004 for a pickup it retried, 42000 for a feed delay) would otherwise stay in cupsd's `printers.conf` until the next job's status. A canceled job keeps its state.
 
 ## 7. Toner level command filter (LEDM)
 

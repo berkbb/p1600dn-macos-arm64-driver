@@ -294,6 +294,11 @@ static void test_code_messages(void) {
         "STATE: -cover-open-error,media-needed-error,toner-empty-error,media-empty-error,media-jam-error,"
         "connecting-to-device-error\nINFO: Yazıcı Hazır\n";
     assert(strcmp(out, ready) == 0 && length == strlen(ready));
+    /* A finished job ends with the same lines. */
+    strcpy(out, "stale");
+    assert(p1600_status_format_job_end(&turkish, out, sizeof(out)) == strlen(ready) && strcmp(out, ready) == 0);
+    assert(p1600_status_format_job_end(NULL, out, sizeof(out)) > 0 && strstr(out, "\nINFO: \n") != NULL);
+    assert(p1600_status_format_job_end(&turkish, NULL, 10) == 0 && p1600_status_format_job_end(&turkish, out, 0) == 0);
 
     p1600_status_format_code(&english, 42000, out, sizeof(out));
     assert(strcmp(out,
@@ -562,7 +567,13 @@ static void test_reader_thread(void) {
                         "STATE: +media-empty-error\n") != NULL);
     assert(strstr(text, "DEBUG: Printer started the job\n") != NULL);
     assert(strstr(text, "DEBUG: Printer reported a printed page\n") != NULL);
-    assert(strstr(text, "DEBUG: Printer status code 10002\nDEBUG: Printer finished the job\n") != NULL);
+    /* The printer's "ready" comes after JOB END: the job end clears the reasons. */
+    static const char cleared[] =
+        "DEBUG: Printer status code 10002\nDEBUG: Printer finished the job\n"
+        "STATE: -cover-open-error,media-needed-error,toner-empty-error,media-empty-error,media-jam-error,"
+        "connecting-to-device-error\nINFO: Printer Ready\n";
+    assert(strstr(text, cleared) != NULL);
+    assert(strcmp(text + strlen(text) - (sizeof(cleared) - 1U), cleared) == 0);
     free(text);
     fclose(log);
     close(channel[0]);
@@ -577,6 +588,7 @@ static void test_reader_thread(void) {
     assert(p1600_status_reader_finish(&reader, 5.0, 5.0));
     text = read_stream(log);
     assert(strstr(text, "DEBUG: Printer canceled the job\n") != NULL);
+    assert(strstr(text, "STATE:") == NULL && strstr(text, "INFO:") == NULL);  /* its state stays */
     free(text);
     fclose(log);
     close(channel[0]);
@@ -646,7 +658,7 @@ static void test_reader_thread(void) {
     assert(p1600_status_reader_start(NULL, 0, &texts, stderr) == -1);
     assert(p1600_status_reader_start(&reader, -1, &texts, stderr) == -1);
     assert(p1600_status_reader_start(&reader, 0, &texts, NULL) == -1);
-    puts("[PASS] Reader thread: job end, cancel, late end, backchannel EOF, quiet and idle limits");
+    puts("[PASS] Reader thread: job end clears the reasons, cancel keeps them, late end, backchannel EOF, quiet and idle limits");
 }
 
 /* Interrupt and idle wake-ups of this process (macOS power accounting). */
@@ -748,6 +760,12 @@ typedef enum {
 
 static bool contains_bytes(const char *data, size_t length, const char *needle) {
     return data && memmem(data, length, needle, strlen(needle)) != NULL;
+}
+
+static const char *last_occurrence(const char *text, const char *needle) {
+    const char *last = NULL;
+    for (const char *found = text ? strstr(text, needle) : NULL; found; found = strstr(found + 1, needle)) last = found;
+    return last;
 }
 
 static FilterRun run_with_printer(const char *filter, const char *raster, PrinterBehaviour behaviour,
@@ -858,7 +876,9 @@ static void test_filter_with_printer(const char *filter) {
     assert(strstr(answered.diagnostics, "INFO: Sayfa Yazdırılıyor 1, 14% Tamamlandı...\n") != NULL);
     assert(strstr(answered.diagnostics, "INFO: Sayfa Yazdırılıyor 2, 100% Tamamlandı...\n") != NULL);
     assert(strstr(answered.diagnostics, "PAGE: 2 1\n") != NULL);
-    assert(strstr(answered.diagnostics, "DEBUG: Printer finished the job\n") != NULL);
+    assert(strstr(answered.diagnostics, "DEBUG: Printer finished the job\n"
+                                        "STATE: -cover-open-error,media-needed-error,toner-empty-error,media-empty-error,"
+                                        "media-jam-error,connecting-to-device-error\nINFO: Yazıcı Hazır\n") != NULL);
 
     /* The printer's status never changes the job bytes. */
     FilterRun plain = run_with_printer(filter, raster, PRINTER_NO_CHANNEL, NULL);
@@ -875,6 +895,9 @@ static void test_filter_with_printer(const char *filter) {
     assert(memcmp(hung_up.output, plain.output, plain.output_length) == 0);
     assert(strstr(hung_up.diagnostics, "INFO: Printer Ready\n") != NULL);
     assert(strstr(hung_up.diagnostics, "DEBUG: Printer finished the job") == NULL);
+    /* No JOB END: the last state the printer reported stays. */
+    const char *last_state = last_occurrence(hung_up.diagnostics, "STATE: ");
+    assert(last_state != NULL && strncmp(last_state, "STATE: +media-empty-error\n", 26) == 0);
     assert(hung_up.seconds < 10.0);
 
     free_run(&answered);
@@ -882,7 +905,8 @@ static void test_filter_with_printer(const char *filter) {
     free_run(&hung_up);
     unlink(raster);
     free(raster);
-    puts("[PASS] Filter with a simulated printer: USTATUSOFF after JOB END, status, progress, unchanged job bytes");
+    puts("[PASS] Filter with a simulated printer: USTATUSOFF after JOB END, status, reasons cleared at JOB END, progress, "
+         "unchanged job bytes");
 }
 
 int main(int argc, char **argv) {

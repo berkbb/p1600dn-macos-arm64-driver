@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [6.0.2] - 2026-11-20
+
+A printer that reports a momentary state no longer leaves a stale "out of paper" or "paper jam" on the queue and in Notification Center. The PPD, the apps, the diagnostic page, and the PAPPL app carry 6.0.2.
+
+### Fixed
+- A queue no longer says "Out of Paper" or "Paper Jam" after a job that printed fine. The P1606dn reports a pickup it has to retry as "out of paper or misfeed" (codes 41002–41004) or a feed delay (42000) and takes it back on its own, but its "ready" comes only after `USTATUS JOB END`, when the reader has stopped listening; cupsd kept the last reason and message in `printers.conf`, across restarts, until the next job's status or a reinstall cleared them. The filter now writes the "Printer Ready" lines when the printer reports the job finished (`p1600_status_format_job_end()`); a canceled job keeps its state.
+- The notifier shows a paper, jam, door, manual feed or toner notice only when the state is still there 10 seconds later (`P1600_NOTIFY_ATTENTION_SETTLE_SECONDS`), as it already did for an unreachable printer after 15 seconds; an engine error is still shown at once. A state the printer takes back within those seconds gives no notice.
+- The notifier withdraws an attention notice from Notification Center when its state clears (paper loaded, jam removed, door closed), also one shown before a restart; a stale banner no longer stays until it is dismissed.
+- The installer clears the driver's own printer-state-reasons and the message that an earlier version left on existing P1600dn queues (`clear_queue_states`, `lpadmin -o printer-state-reasons=…`), so a queue that says "Out of Paper" is cleared by the update itself instead of by its next job or a reinstall of the queue; other reasons such as paused stay, and queues without them are not touched.
+- `test/test_utility_app.sh` falls back to `/opt/homebrew/opt/python@3/libexec/bin/python3` when `PYTHON` is not set.
+
+### Changed
+- `make test-ustatus` checks the clearing lines after `JOB END` and that a canceled job or a closed backchannel keeps the last state; `make test-notify` checks the settle times and the cleared-reason list; `make test-notifier-app` waits for the settle time and expects the withdrawn notices in its log (about 30 seconds longer).
+- `README.md`, `DEVELOPMENT.md` and `reference/zjstream/ZJS_STREAM_SPEC.md` section 6 describe the job-end clearing, stale state clearing on install, and the notifier's settle time and withdrawal.
+- Version 6.0.2 in the PPD (`*FileVersion`), `p1600_diagnostic.h`, the PAPPL app, the utility and notifier `Info.plist` files, and the manager's version check.
+
 ## [6.0.1] - 2026-10-22
 
 The first published release: a native Apple Silicon (arm64) CUPS driver for macOS 11 and later. Version 6.0.0 (2026-10-16) was withdrawn; 6.0.1 replaces it.

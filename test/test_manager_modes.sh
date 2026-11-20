@@ -245,6 +245,54 @@ test_airprint_mode() {
     echo "    [PASS] Mode 9: AirPrint On/Off (LaunchDaemon as nobody, restart on reinstall, needs the driver)"
 }
 
+# An install clears the driver's own reasons on this driver's queues (the
+# printer's last state stayed in printers.conf up to 6.0.1); other reasons
+# stay, queues without them are left alone, and a failure is only reported.
+test_install_clears_queue_state() {
+    (
+        : >"$workflow_log"
+        p1600dn_queue_names() { printf 'Ofis\nDepo\nBos\n'; }
+        # The stand-in cupsd answers with the state until lpadmin changed it.
+        lpstat() {
+            [ "${1:-}" = "-l" ] && [ "${2:-}" = "-p" ] || return 0
+            printf 'printer %s is idle.  enabled since test\n' "${3:-}"
+            if grep -Fq "lpadmin <-p> <${3:-}>" "$workflow_log"; then
+                sed -n "s/^lpadmin <-p> <${3:-}> <-o> <printer-state-reasons=\(.*\)> .*/\tAlerts: \1/p" "$workflow_log" | tr ',' ' '
+                return 0
+            fi
+            case "${3:-}" in
+                Ofis) printf '\tAlerts: media-empty-error paused\n' ;;
+                Depo) printf '\tAlerts: media-jam-error\n' ;;
+                Bos) printf '\tAlerts: none\n' ;;
+            esac
+        }
+        clear_queue_states >"$test_root/clear-state.out" 2>&1 || exit 1
+        grep -Fq "lpadmin <-p> <Ofis> <-o> <printer-state-reasons=paused> <-o> <printer-state-message=>" "$workflow_log" || exit 1
+        grep -Fq "lpadmin <-p> <Depo> <-o> <printer-state-reasons=none> <-o> <printer-state-message=>" "$workflow_log" || exit 1
+        if grep -Fq "<-p> <Bos>" "$workflow_log"; then exit 1; fi
+        [ "$(grep -c '^lpadmin' "$workflow_log")" = "2" ] || exit 1
+        grep -Fq "'Ofis': yazıcının eski durumu silindi" "$test_root/clear-state.out" || exit 1
+        grep -Fq "'Depo': yazıcının eski durumu silindi" "$test_root/clear-state.out" || exit 1
+        # lpadmin failing, or a cupsd that leaves the state there, is
+        # reported and does not stop the install.
+        : >"$workflow_log"
+        lpadmin() { return 1; }
+        clear_queue_states >"$test_root/clear-state-failed.out" 2>&1 || exit 1
+        grep -Fq "'Ofis': eski durum silinemedi" "$test_root/clear-state-failed.out" || exit 1
+        grep -Fq "'Depo': eski durum silinemedi" "$test_root/clear-state-failed.out" || exit 1
+        lpadmin() { return 0; }
+        clear_queue_states >"$test_root/clear-state-ignored.out" 2>&1 || exit 1
+        grep -Fq "'Ofis': eski durum silinemedi" "$test_root/clear-state-ignored.out" || exit 1
+        if grep -Fq "silindi /" "$test_root/clear-state-ignored.out"; then exit 1; fi
+        # The install runs it once the new PPD is in place.
+        : >"$workflow_log"
+        clear_queue_states() { [ -f "$INSTALLED_PPD" ] && echo "clear_queue_states after PPD" >>"$workflow_log"; }
+        install_driver >"$test_root/install-clear.out" 2>&1 || exit 1
+        grep -Fq "clear_queue_states after PPD" "$workflow_log" || exit 1
+    ) || fail "Install does not clear the driver's stale printer state on its queues"
+    echo "    [PASS] Install: Driver's Stale Printer State Cleared on Its Queues (other reasons kept, clean queues untouched, failure reported)"
+}
+
 # The duplicate-printer warning only while macOS Printer Sharing is on.
 test_airprint_sharing_warning() {
     (
@@ -961,6 +1009,7 @@ EOF
 
 echo "[*] Starting isolated manager mode and wrapper tests..."
 test_install_mode
+test_install_clears_queue_state
 test_airprint_mode
 test_airprint_sharing_warning
 test_install_failure_matrix

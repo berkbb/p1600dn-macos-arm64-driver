@@ -4,8 +4,9 @@
 
 | Version | Security fixes |
 |---|---|
-| 6.0.1 (latest) | Yes |
-| 6.0.0 | No: withdrawn, update to 6.0.1 |
+| 6.0.2 (latest) | Yes |
+| 6.0.1 | No: update to 6.0.2 |
+| 6.0.0 | No: withdrawn, update to 6.0.2 |
 | Before 6.0.0 | Never published |
 
 Security fixes go into a new release of the latest version. To see the installed version:

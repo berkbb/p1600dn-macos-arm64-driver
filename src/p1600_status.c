@@ -252,6 +252,10 @@ size_t p1600_status_format_code(const P1600StatusTexts *texts, int code, char *o
     return buffer.length;
 }
 
+size_t p1600_status_format_job_end(const P1600StatusTexts *texts, char *out, size_t size) {
+    return p1600_status_format_code(texts, P1600_STATUS_READY_CODE, out, size);
+}
+
 bool p1600_progress_due(uint32_t line_index, uint32_t total, unsigned int *percent) {
     if (total == 0 || line_index >= total || (total - line_index - 1U) % 256U != 0) return false;
     if (percent) *percent = (unsigned int)(((uint64_t)line_index + 1U) * 100U / total);
@@ -408,6 +412,10 @@ static void handle_message(void *context, P1600UstatusKind kind, int code) {
     case P1600_USTATUS_JOB_END:
     case P1600_USTATUS_JOB_CANCELED:
         fprintf(reader->log, "DEBUG: Printer %s the job\n", kind == P1600_USTATUS_JOB_END ? "finished" : "canceled");
+        /* The printer's "ready" comes after JOB END: clear its reasons here. */
+        if (kind == P1600_USTATUS_JOB_END && p1600_status_format_job_end(reader->texts, lines, sizeof(lines)) > 0) {
+            fputs(lines, reader->log);
+        }
         break;
     case P1600_USTATUS_NONE:
     case P1600_USTATUS_OTHER:

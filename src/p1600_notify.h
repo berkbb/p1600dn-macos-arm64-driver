@@ -66,13 +66,19 @@ typedef struct {
     char reason[P1600_NOTIFY_REASON_SIZE];   /* base reason of an attention notice ("media-jam"), else "" */
     char message[P1600_NOTIFY_MESSAGE_SIZE]; /* printer-state-message to show; "" selects the generic text */
     int level;                            /* toner level, -1 unknown */
-    /* A plain connecting-to-device (no -error form) is what every backend
-     * sets for a moment while it connects: show it only when it is still
-     * active P1600_NOTIFY_SETTLE_SECONDS later (p1600_notify_attention_active()). */
+    /* Shown only when still active p1600_notify_settle_seconds() later
+     * (p1600_notify_attention_active()): a plain connecting-to-device (no
+     * -error form) is what every backend sets for a moment while it
+     * connects, and the driver's reasons follow the printer's momentary
+     * states (a pickup it retries reports "out of paper or misfeed" or a
+     * feed delay for a few seconds, then prints). Only an engine error
+     * (connecting-to-device-error) is shown at once. */
     bool tentative;
 } P1600Notice;
 
+/* Settle times: an unreachable printer, and the driver's reasons. */
 #define P1600_NOTIFY_SETTLE_SECONDS 15
+#define P1600_NOTIFY_ATTENTION_SETTLE_SECONDS 10
 #define P1600_NOTIFY_MAX_NOTICES 16
 
 /* --- decision logic (pure) ------------------------------------------------ */
@@ -95,7 +101,8 @@ P1600TonerBucket p1600_notify_toner_bucket(const P1600PrinterSnapshot *snapshot)
  * attention notice; a worse toner bucket gives a toner notice (an unknown
  * earlier level counts as ok, and a toner-empty attention notice replaces
  * the empty one); a rise from 15% or less to over 50% gives "cartridge
- * replaced". Cleared states give nothing. A `before` without data only
+ * replaced". Cleared states give nothing here; p1600_notify_cleared_reasons()
+ * lists them. A `before` without data only
  * primes: the attention reasons already active in `after` are reported once,
  * toner is not. Returns the number of notices. */
 int p1600_notify_compare(const P1600PrinterSnapshot *before, const P1600PrinterSnapshot *after, P1600Notice *notices, int max);
@@ -127,6 +134,17 @@ size_t p1600_notify_active_reasons(const P1600PrinterSnapshot *snapshot, char *o
 
 /* True when `base` is an entry of such a list. */
 bool p1600_notify_reason_listed(const char *list, const char *base);
+
+/* How long a tentative notice of `base` waits: P1600_NOTIFY_SETTLE_SECONDS for
+ * connecting-to-device, P1600_NOTIFY_ATTENTION_SETTLE_SECONDS for the rest. */
+int p1600_notify_settle_seconds(const char *base);
+
+/* The attention reasons active in `before` and no longer in `after`, as a
+ * list like p1600_notify_active_reasons(). The agent withdraws their notices
+ * from Notification Center: the printer no longer needs that. Empty when
+ * either snapshot has no data. */
+size_t p1600_notify_cleared_reasons(const P1600PrinterSnapshot *before, const P1600PrinterSnapshot *after, char *out,
+                                    size_t size);
 
 /* Keeps the last known toner level when `after` has none (marker-levels
  * missing for a moment), so a later rise can still count as a new cartridge. */

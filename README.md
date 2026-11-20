@@ -38,7 +38,7 @@ All models are automatically discovered via macOS Bonjour or USB plug-and-play u
 - **Flexible Connectivity**: Supports direct USB connection as well as local network queues via the printer's built-in Ethernet port.
 - **Comprehensive Media Support**: 18 paper sizes (A4, Letter, Legal, Executive, 8.5 × 13, A5, A6, JIS B5, three 16K sizes, postcards, five envelopes), custom sizes, and 16 media types. Every size gets a real paper code, including B5, the 16K sizes and custom sizes (0 is never sent).
 - **Hardware Controls**: EconoMode, 1–5 print density, jam recovery, media source (Automatically Select by default, or Manual Feed) and type, printer-side copies, and 180° reverse-corner rotation.
-- **Live Printer Status**: During a job the filter reads the printer's PJL USTATUS replies from the CUPS backchannel and reports the printer's states (out of paper, manual feed, manual duplex "turn the stack and press Go", jams, cover open, toner missing, engine errors) with the PPD's Turkish or English texts, plus page progress lines. The job stays open until the printer reports the last sheet out.
+- **Live Printer Status**: During a job the filter reads the printer's PJL USTATUS replies from the CUPS backchannel and reports the printer's states (out of paper, manual feed, manual duplex "turn the stack and press Go", jams, cover open, toner missing, engine errors) with the PPD's Turkish or English texts, plus page progress lines. The job stays open until the printer reports the last sheet out, and the printer's states are cleared when it reports the job finished: a pickup it retried (reported as out of paper or misfeed, or a feed delay, then taken back) no longer stays on the queue.
 - **Printer Utility**: `P1600dn Series Utility.app` (SwiftUI, arm64) is the printer utility for this printer family: Sleep after and Turn off after (Energy Saving), Quiet Mode, Configuration/Demo/Supplies Status pages, the Cleaning Page, and the Printer Web Page (the printer's web pages, over USB through a local proxy). It sends the printer's PJL settings and page commands and is in 16 languages, all the project's own translations; information pages print in English in Romanian, which the printer does not have. Its window follows current macOS settings windows: the printer's state and toner level at the top, grouped sections, a Print button for each page, and settings that apply as soon as they change. It opens from **Printers & Scanners → Options & Supplies → Utility** and also configures network printers. `p1600dn-utility` does the same from Terminal.
 - **16 Languages**: Every option, choice and status message in the PPD, the utility and the notifier in English, Danish, German, Spanish, Finnish, French, Italian, Korean, Dutch, Norwegian, Swedish, Portuguese, Simplified and Traditional Chinese, Turkish and Romanian, all in the project's own translations.
 - **AirPrint (iPhone, iPad) and IPP Everywhere**: an optional AirPrint server makes every P1600dn queue printable from iPhone, iPad and IPP Everywhere clients through this Mac. It passes the official IPP Everywhere test suite (`ipptool ipp-everywhere.test`, 40 passed, 0 failed). Every job goes to the CUPS queue, so through the driver and its page check.
@@ -48,7 +48,7 @@ All models are automatically discovered via macOS Bonjour or USB plug-and-play u
   - engine errors and an unreachable printer;
   - toner low (15 %), very low (5 %), empty, and a new cartridge.
   
-  Where the printer reports a state, the text is the PPD's message for it. Each notice is shown once, not repeated after a restart. A click opens the printer utility for that printer.
+  Where the printer reports a state, the text is the PPD's message for it. A state must last 10 seconds to be shown (15 for an unreachable printer), so a pickup the printer retries gives no notice, and a notice is withdrawn when its state clears. Each notice is shown once, not repeated after a restart. A click opens the printer utility for that printer.
 - **Toner Level**: `commandtop1600dn` answers CUPS `ReportLevels` requests: USB printers are asked for the printer's LEDM consumables document over their vendor USB interface, network printers through Apple's `snmpInk`.
 - **Status & Supply Monitoring**: Real-time CUPS/IPP printer state and device supply level querying (`--en` / `--tr`).
 - **Gutenprint Removal**: Gutenprint has no P1600dn driver, and this driver replaces it. The first installation asks before it removes it (`--install --yes` does not ask), and every uninstallation removes it; P1600dn queues still on it are switched to this driver, and Gutenprint stays only while another printer prints through it.
@@ -142,7 +142,8 @@ Installation steps performed automatically:
 1. Performs a clean build and executes all automated unit, protocol, and filter tests.
 2. Installs `rastertop1600dn`, `commandtop1600dn`, `p1600dn-utility`, `p1600dn-status`, `P1600dn Series Utility.app`, and printer icons into `/Library/Printers/p1600dn/`.
 3. Installs `P1600dn-Series.ppd` into `/Library/Printers/PPDs/Contents/Resources/`.
-4. Reloads the system CUPS daemon (`cupsd`).
+4. Clears the printer's stale state (out of paper, jam, door, manual feed, toner, engine error) that an earlier version left on this driver's queues; other states such as paused stay. Existing queues are kept as they are otherwise.
+5. Reloads the system CUPS daemon (`cupsd`).
 
 The manager automatically checks for Xcode Command Line Tools, launching `xcode-select --install` if necessary. It requests administrator (`sudo`) authorization only when needed.
 
@@ -304,8 +305,9 @@ It follows every P1600dn queue through CUPS and notifies:
 
 | Situation | Notification |
 |---|---|
-| Out of paper, paper jam, cover or door open | The driver's message from the PPD in your language (e.g. *Out of Paper: Refill the paper tray, then press Go on the printer.*) |
-| Manual feed, manual duplex | The driver's message (*Manual Duplex: For the second sides, move the printed sheets from the output bin to Tray 1, printed side down, then press Go on the printer.*) |
+| Out of paper, paper jam, cover or door open | After 10 seconds, when the printer still reports it: the driver's message from the PPD in your language (e.g. *Out of Paper: Refill the paper tray, then press Go on the printer.*). A pickup the printer retries, which it reports as out of paper or misfeed or as a feed delay for a few seconds, gives no notice |
+| Manual feed, manual duplex | After 10 seconds: the driver's message (*Manual Duplex: For the second sides, move the printed sheets from the output bin to Tray 1, printed side down, then press Go on the printer.*) |
+| Paper loaded, jam removed, door closed | The notice is withdrawn from Notification Center, also one shown before a restart |
 | Engine error | At once, with the driver's message |
 | Printer unreachable | After 15 seconds, so the moment a job connects does not count |
 | Toner 15 % or less, 5 % or less, empty | Once per level; the toner level is refreshed through the driver after printing (at most every 30 minutes) |

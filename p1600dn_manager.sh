@@ -217,14 +217,14 @@ test_p1606dn_ppd() (
     local paper_choices=(Letter Legal A4 Executive FanFoldGermanLegal A5 A6 B5 195x270mm 184x260mm 197x273mm Postcard DoublePostcard Env10 EnvMonarch EnvISOB5 EnvC5 EnvDL)
     local envelopes=(Env10 EnvMonarch EnvISOB5 EnvC5 EnvDL)
     [ -f "$ppd" ] || fail "Missing HP LaserJet Pro P1606dn PPD"
-    grep -Fqx '*FileVersion: "6.0.1"' "$ppd" || fail "Wrong PPD version"
+    grep -Fqx '*FileVersion: "6.0.2"' "$ppd" || fail "Wrong PPD version"
     # The PPD's version is the driver's: the diagnostic page, the PAPPL app
     # and both apps must carry the same one.
-    grep -Fq '#define P1600_DRIVER_VERSION "6.0.1"' "$DRIVER_DIR/src/p1600_diagnostic.h" || fail "Diagnostic page version differs from the PPD"
-    grep -Fqx '        "6.0.1",' "$DRIVER_DIR/src/pappl_p1600dn.c" || fail "PAPPL app version differs from the PPD"
+    grep -Fq '#define P1600_DRIVER_VERSION "6.0.2"' "$DRIVER_DIR/src/p1600_diagnostic.h" || fail "Diagnostic page version differs from the PPD"
+    grep -Fqx '        "6.0.2",' "$DRIVER_DIR/src/pappl_p1600dn.c" || fail "PAPPL app version differs from the PPD"
     for plist in "$DRIVER_DIR/utility/Info.plist" "$DRIVER_DIR/notifier/Info.plist"; do
-        [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" = "6.0.1" ] &&
-            [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" = "6.0.1" ] ||
+        [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" = "6.0.2" ] &&
+            [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" = "6.0.2" ] ||
             fail "App version differs from the PPD: $plist"
     done
     grep -Fqx '*cupsVersion: "1.6"' "$ppd" || fail "Unsupported CUPS PPD extension version"
@@ -522,6 +522,54 @@ p1600dn_queue_names() {
     "$INSTALL_DIR/p1600dn-utility" --en list 2>/dev/null | awk -F '\t' 'NF >= 3 { sub(/ \*$/, "", $1); print $1 }'
 }
 
+# cupsd keeps a queue's last printer-state-reasons and message in
+# printers.conf, across restarts. Up to 6.0.1 the filter left the printer's
+# last state there when the printer took it back after the job (a retried
+# pickup: "out of paper or misfeed", a feed delay), so a queue could say
+# "Out of paper" until its next job. An install clears the driver's own
+# reasons on every queue of this driver; other reasons (paused, ...) stay.
+DRIVER_STATE_REASONS="cover-open-error media-needed-error toner-empty-error media-empty-error media-jam-error connecting-to-device-error"
+
+# The queue's printer-state-reasons, space separated ("none" when empty).
+queue_alerts() {
+    LC_ALL=C lpstat -l -p "$1" 2>/dev/null | sed -n 's/^[[:space:]]*Alerts:[[:space:]]*//p' | head -n 1
+}
+
+# True when one of the driver's reasons is on the queue.
+driver_state_present() {
+    local reason
+    for reason in $(queue_alerts "$1"); do
+        case " $DRIVER_STATE_REASONS " in *" $reason "*) return 0 ;; esac
+    done
+    return 1
+}
+
+clear_queue_states() {
+    local queue reasons kept reason
+    while IFS= read -r queue; do
+        [ -n "$queue" ] || continue
+        is_safe_existing_queue_name "$queue" || continue
+        driver_state_present "$queue" || continue
+        reasons=$(queue_alerts "$queue")
+        kept=""
+        for reason in $reasons; do
+            case " $DRIVER_STATE_REASONS " in
+                *" $reason "*) ;;
+                *) kept="$kept${kept:+,}$reason" ;;
+            esac
+        done
+        # Read back: cupsd takes the reasons as a CUPS-Add-Modify-Printer
+        # attribute; a cupsd that ignored them would leave the state there.
+        if lpadmin -p "$queue" -o "printer-state-reasons=${kept:-none}" -o printer-state-message= 2>/dev/null &&
+           ! driver_state_present "$queue"; then
+            echo "[i] '$queue': yazıcının eski durumu silindi / the printer's stale state was cleared ($reasons)."
+        else
+            print_color "$YELLOW" "[!] '$queue': eski durum silinemedi; bir sonraki yazdırma temizler / the stale state could not be cleared; the next job clears it ($reasons)."
+        fi
+    done < <(p1600dn_queue_names)
+    return 0
+}
+
 airprint_menu() {
     if airprint_enabled; then
         print_color "$GREEN" "[+] AirPrint açık / AirPrint is on."
@@ -658,6 +706,7 @@ install_driver_steps() {
 
     retire_openprinting_fallback
     retire_legacy_driver
+    clear_queue_states
     if [ "$remove_gutenprint" -eq 1 ]; then
         purge_gutenprint || print_color "$YELLOW" "[!] Gutenprint tamamen kaldırılamadı / Gutenprint could not be removed completely."
     fi

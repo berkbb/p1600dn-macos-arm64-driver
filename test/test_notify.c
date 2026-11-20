@@ -165,7 +165,7 @@ static void test_attention(void) {
                     CHECK(strcmp(notices[0].reason, reason) == 0);
                     CHECK(strcmp(notices[0].message, message) == 0);
                     CHECK(notices[0].level == 40);
-                    CHECK(notices[0].tentative == (connecting && !error_form));
+                    CHECK(notices[0].tentative == !(connecting && error_form));
                 }
                 /* Still there, cleared, or primed from no data (reported once). */
                 CHECK(compare(&after, &after, notices) == 0);
@@ -240,7 +240,40 @@ static void test_attention(void) {
     CHECK(p1600_notify_compare(&before, NULL, notices, 4) == 0);
     P1600PrinterSnapshot unknown = no_data();
     CHECK(p1600_notify_compare(&before, &unknown, notices, 4) == 0);
-    puts("[PASS] Attention notices: 10 reasons x 4 suffixes x message, cleared, repeated, primed, routing of the message");
+
+    /* Settle times: the driver's reasons wait less than an unreachable printer. */
+    CHECK(p1600_notify_settle_seconds("connecting-to-device") == P1600_NOTIFY_SETTLE_SECONDS);
+    CHECK(p1600_notify_settle_seconds("media-empty") == P1600_NOTIFY_ATTENTION_SETTLE_SECONDS);
+    CHECK(p1600_notify_settle_seconds("other") == P1600_NOTIFY_ATTENTION_SETTLE_SECONDS);
+    CHECK(p1600_notify_settle_seconds(NULL) == P1600_NOTIFY_ATTENTION_SETTLE_SECONDS);
+    CHECK(P1600_NOTIFY_ATTENTION_SETTLE_SECONDS > 0 && P1600_NOTIFY_SETTLE_SECONDS > P1600_NOTIFY_ATTENTION_SETTLE_SECONDS);
+
+    /* Reasons a change clears (their notices are withdrawn), in table order;
+     * another suffix keeps a reason, and connecting-to-device counts only in
+     * its active forms. */
+    char cleared[256];
+    P1600PrinterSnapshot earlier = make(40, "Jam", "paused,offline-report,media-jam-error,media-empty-error");
+    P1600PrinterSnapshot later = make(40, "", "paused,media-empty-warning");
+    CHECK(p1600_notify_cleared_reasons(&earlier, &later, cleared, sizeof(cleared)) == strlen("media-jam,offline"));
+    CHECK(strcmp(cleared, "media-jam,offline") == 0);
+    CHECK(p1600_notify_cleared_reasons(&later, &earlier, cleared, sizeof(cleared)) == 0 && cleared[0] == '\0');
+    CHECK(p1600_notify_cleared_reasons(&earlier, &earlier, cleared, sizeof(cleared)) == 0);
+    P1600PrinterSnapshot unreachable = make(40, "The printer is unreachable at this time.", "connecting-to-device");
+    P1600PrinterSnapshot connected = make(40, "", NULL);
+    CHECK(p1600_notify_cleared_reasons(&unreachable, &connected, cleared, sizeof(cleared)) == strlen("connecting-to-device"));
+    CHECK(strcmp(cleared, "connecting-to-device") == 0);
+    CHECK(p1600_notify_cleared_reasons(&plain, &connected, cleared, sizeof(cleared)) == 0 && cleared[0] == '\0');
+    CHECK(p1600_notify_cleared_reasons(&engine, &connected, cleared, sizeof(cleared)) == strlen("connecting-to-device"));
+    CHECK(p1600_notify_cleared_reasons(&earlier, &unknown, cleared, sizeof(cleared)) == 0 && cleared[0] == '\0');
+    CHECK(p1600_notify_cleared_reasons(&unknown, &later, cleared, sizeof(cleared)) == 0);
+    CHECK(p1600_notify_cleared_reasons(NULL, &later, cleared, sizeof(cleared)) == 0);
+    CHECK(p1600_notify_cleared_reasons(&earlier, NULL, cleared, sizeof(cleared)) == 0);
+    CHECK(p1600_notify_cleared_reasons(&earlier, &later, NULL, 4) == 0);
+    strcpy(cleared, "stale");
+    CHECK(p1600_notify_cleared_reasons(&earlier, &later, cleared, 0) == 0);
+    CHECK(p1600_notify_cleared_reasons(&earlier, &later, cleared, 10) == 0 && cleared[0] == '\0');
+    puts("[PASS] Attention notices: 10 reasons x 4 suffixes x message, cleared, repeated, primed, routing of the message, "
+         "settle times, cleared reasons");
 }
 
 static void test_toner(void) {
@@ -1673,6 +1706,9 @@ static int serve(const char *port_file, const char *scenario) {
     if (main_scenario) {
         ok = ok && step(&standin, "out of paper", 4, "media-empty-error", P1600_OUT_OF_PAPER, -99);
         ok = ok && step(&standin, "out of paper again", 4, "media-empty-error", P1600_OUT_OF_PAPER, -99);
+        /* The notice waits for the settle time and is shown while the state
+         * is still there; loading paper then withdraws it. */
+        if (ok) pause_ms(P1600_NOTIFY_ATTENTION_SETTLE_SECONDS * 1000 + 1500);
         ok = ok && step(&standin, "paper loaded", 3, "", "", -99);
         ok = ok && step(&standin, "toner 12%", -1, NULL, NULL, 12);
         ok = ok && step(&standin, "toner 12% again", -1, NULL, NULL, 12);
@@ -1690,8 +1726,10 @@ static int serve(const char *port_file, const char *scenario) {
     } else {
         ok = ok && step(&standin, "toner 0% (reported before the restart)", -1, NULL, NULL, 0);
         ok = ok && step(&standin, "paper jam", 4, "media-needed-error,media-jam-error", "", -99);
-        /* A backend connecting for a moment is no news; a printer that stays
-         * unreachable past the settle time is. */
+        if (ok) pause_ms(P1600_NOTIFY_ATTENTION_SETTLE_SECONDS * 1000 + 1500);
+        /* The jam and the stack (reported before the restart) clear: their
+         * notices are withdrawn. A backend connecting for a moment is no
+         * news; a printer that stays unreachable past the settle time is. */
         ok = ok && step(&standin, "connecting", 4, "connecting-to-device", "Connecting to printer.", -99);
         pause_ms(2000);
         ok = ok && step(&standin, "connected", 4, "", "", -99);
