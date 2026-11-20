@@ -11,7 +11,7 @@ Requirements:
 - Xcode Command Line Tools with `clang`, `make` and `python3` (Homebrew already needs them).
 
 > [!NOTE]
-> The cask installs the `v6.0.1` release of the public `berkbb/p1600dn-macos-arm64-driver` repository (its source archive, checked by SHA-256). This folder is the source of the public tap [berkbb/homebrew-tap](https://github.com/berkbb/homebrew-tap); see `DISTRIBUTION_GUIDE.md`, section 5.
+> The cask installs the `v6.0.2` release of the public `berkbb/p1600dn-macos-arm64-driver` repository (its source archive, checked by SHA-256). This folder is the source of the public tap [berkbb/homebrew-tap](https://github.com/berkbb/homebrew-tap); see `DISTRIBUTION_GUIDE.md`, section 5.
 
 ---
 
@@ -22,9 +22,10 @@ brew tap berkbb/tap
 brew install --cask berkbb/tap/p1600dn
 ```
 
-Homebrew 7 treats taps outside Homebrew as untrusted: `brew install` takes the full name `berkbb/tap/p1600dn` once the tap is added. To find the cask with `brew search p1600dn` and use the short name `p1600dn`, trust the tap once with `brew trust berkbb/tap`.
+Homebrew 7 treats taps outside Homebrew as untrusted: `brew install` takes the full name `berkbb/tap/p1600dn` once the tap is added. To find the cask with `brew search p1600dn` and use the short name `p1600dn`, add the tap and trust it once:
 
 ```bash
+brew tap berkbb/tap
 brew trust berkbb/tap
 brew search p1600dn
 brew install --cask p1600dn

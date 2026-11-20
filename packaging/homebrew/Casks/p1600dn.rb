@@ -1,6 +1,6 @@
 cask "p1600dn" do
-  version "6.0.1"
-  sha256 "e532636bbf3388adcec12710c22f5cd7cf9a10162cf7caef5db33f8185dc0f03"
+  version "6.0.2"
+  sha256 "22f8767ba18d1469332a7e363e9b64784b4d3e6f9e0400f2b72421e413d4337d"
 
   # There is no .pkg: the driver installs the way the manager installs it.
   # It builds the driver from the source archive, runs every test and installs
